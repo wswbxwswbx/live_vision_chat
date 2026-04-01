@@ -54,12 +54,82 @@
 
 ### 1.5 参考架构
 
-- Claude Code（Anthropic）：Fast Agent Loop、Memory System
-- OpenClaw：Slow Agent 事件驱动、Skill Markdown 格式
+- Claude Code（Anthropic）：任务/记忆/prompt 组织方式
+- OpenClaw：session/skills/streaming 基础设施启发
 
 ---
 
-## 二、整体架构
+## 二、术语表
+
+### 2.1 Agent 与系统边界
+
+| 术语 | 定义 |
+|------|------|
+| Fast Agent | 面向 live 对话的前台 agent，负责用户正在等待的响应 |
+| Slow Agent | 面向后台任务的 agent，负责长任务、持续感知、长期记忆写入 |
+| 端侧 | HarmonyOS 客户端，负责音频/视频采集、播放、工具执行和 UI 展示 |
+| 云侧 | 承载 Fast Agent、Slow Agent、Runtime Store、Long-term Memory 的服务端 |
+
+### 2.2 Loop 层级
+
+| 术语 | 定义 |
+|------|------|
+| SlowLoop | Slow Agent 内部执行任务的总称 |
+| OneShotLoop | 一次性任务 loop，规划后执行，完成即结束 |
+| StreamingLoop | 持续接收外部输入的 loop，上位抽象 |
+| PassiveStreamingLoop | 被动累积型 streaming loop，持续收集和压缩信息，不主动驱动用户动作 |
+| ReactiveStreamingLoop | 反应式 streaming loop，系统发指令，环境反馈驱动下一步动作 |
+| MeetingMinutesLoop | `PassiveStreamingLoop` 的实现，用于会议记录/摘要累积 |
+| VisualGuidanceLoop | `ReactiveStreamingLoop` 的实现，用于物理世界指导闭环 |
+| VisionSensor | `ReactiveStreamingLoop` 的观测器，负责按频率读取并分析视频帧 |
+
+### 2.3 任务与事件
+
+| 术语 | 定义 |
+|------|------|
+| task | 用户目标在系统中的持久化任务对象 |
+| run | 某个 task 的一次具体执行实例；一个 task 可因重试或 supersede 派生多个 run |
+| handoff | Fast 把任务和上下文交给 Slow 的控制权协议 |
+| task_event | Slow 回传给 Fast 的统一事件信封 |
+| event_kind | `task_event` 的事件类型，如 `accepted` / `progress` / `need_user_input` / `completed` |
+| supersede | 新任务执行替代旧 run，旧 run 不再继续推进 |
+| checkpoint | Slow loop 的执行快照，用于暂停、恢复、重试和崩溃恢复 |
+
+### 2.4 控制权与状态
+
+| 术语 | 定义 |
+|------|------|
+| speaker_owner | 当前谁有发言权，通常是 `user / fast / slow` |
+| attention_owner | 当前系统主要关注哪个执行体，通常是 `fast / slow` |
+| speak_policy | 某个事件是否发声以及如何发声，`interrupt / queue / silent` |
+| execution_state | 任务执行态，如 `handoff_pending / running / waiting_user / completed` |
+| delivery_state | 任务通知态，如 `silent / pending_announce / announced / deferred` |
+| foreground | 当前直接与用户交互的执行体 |
+| background | 当前在后台推进但不抢占用户对话的执行体 |
+
+### 2.5 存储边界
+
+| 术语 | 定义 |
+|------|------|
+| Runtime Store | 保存 conversation state、task registry、checkpoint、task event 索引的运行时存储 |
+| Conversation State | 当前 session 的 owner、foreground/background task、interrupt epoch 等会话态 |
+| Task Registry | 给 Fast/UI 读取的任务摘要索引，不是执行真相源 |
+| Long-term Memory | 跨会话仍有价值的 user / feedback / project / reference 记忆 |
+| MemorySystem | Long-term Memory 的检索、写入、清理、过期校验组件 |
+
+### 2.6 感知模式
+
+| 术语 | 定义 |
+|------|------|
+| Turn-bound | 单轮按需感知，通常是用户提问时带一帧图像或一次短输入 |
+| Streaming | 持续感知，端侧持续推流，Slow loop 持续处理 |
+| observe | 从环境中读取新信号，例如视频帧、transcript、timer |
+| react | 根据观测结果调整下一步行为 |
+| aggregate | 持续收集输入并压缩为结构化结果，而不是即时纠错 |
+
+---
+
+## 三、整体架构
 
 ```
 端侧（HarmonyOS）
@@ -96,7 +166,7 @@
 
 ---
 
-## 三、快系统（Fast Agent）
+## 四、快系统（Fast Agent）
 
 ### 3.1 职责边界
 
@@ -496,7 +566,7 @@ class TTSQueue:
 
 ---
 
-## 四、慢系统（Slow Agent）
+## 五、慢系统（Slow Agent）
 
 ### 4.1 职责边界
 
@@ -806,9 +876,11 @@ class SlowAgent:
         return restored
 ```
 
-#### 4.2.8 物理世界 Loop（VL_WAIT）
+#### 4.2.8 Reactive Streaming Loop 示例（VisualGuidanceLoop）
 
 **场景：** 指导类任务（如修车指导），Slow Agent 下发指令后，需要通过视频流实时观察执行结果来决定下一步。
+
+这里的 `VisualGuidanceLoop` 是 `StreamingLoop` 的一个具体子类，不是和 `StreamingLoop` 并列的概念。
 
 ```python
 class VisualGuidanceLoop:
@@ -1087,19 +1159,18 @@ write_file("tasks/output.txt", "data")
 print_result({"status": "ok", "data": ...})
 ```
 
-### 4.5 Memory 系统
+### 4.5 Long-term Memory 系统
 
 #### 文件结构
 
 ```
-memory/
+long_term_memory/
   user/                    ← 用户偏好、角色信息
   feedback/                ← 用户反馈和纠正
   project/                 ← 项目上下文和目标
-  reference/                ← 外部系统引用
+  reference/               ← 外部系统引用
   skills/                  ← 用户自定义 skill（markdown）
   INDEX.md                 ← 记忆索引
-  tasks/                   ← 任务历史
 ```
 
 #### 每条记忆的格式
@@ -1283,7 +1354,7 @@ class WebSocketClient:
 
 ---
 
-## 五、快慢通信机制
+## 六、快慢通信机制
 
 ### 5.1 Handoff 消息格式
 
@@ -1397,7 +1468,7 @@ class WebSocketClient:
 
 ---
 
-## 六、Runtime Store 与 Long-term Memory
+## 七、Runtime Store 与 Long-term Memory
 
 这里不再把所有共享状态都叫 memory，而是拆成三层：
 
@@ -1491,7 +1562,7 @@ Long-term Memory 只保存未来会话仍然有价值的信息，不保存当前
 
 ---
 
-## 七、Skill Registry 设计
+## 八、Skill Registry 设计
 
 ### 7.1 统一工厂模式
 
@@ -1666,7 +1737,7 @@ registry.subscribe(lambda m: fast_agent.reload_manifest(m))
 
 ---
 
-## 八、端侧改动
+## 九、端侧改动
 
 ### 8.1 端侧职责
 
@@ -1865,7 +1936,7 @@ toolExecutor.register('camera_zoom_in', async () => {
 
 ---
 
-## 九、WebSocket 消息格式
+## 十、WebSocket 消息格式
 
 ### 9.1 端侧 → 云侧
 
@@ -1954,7 +2025,7 @@ toolExecutor.register('camera_zoom_in', async () => {
 
 ---
 
-## 十、Loop 架构对比与选型
+## 十一、Loop 架构对比与选型
 
 ### 10.1 Claude Code Loop（while + 状态机）
 
@@ -2101,7 +2172,7 @@ class SlowAgent:
 
 ---
 
-## 十一、视频流输入与慢系统 Loop 类型
+## 十二、视频流输入与慢系统 Loop 类型
 
 ### 11.1 视频帧的两种使用模式
 
@@ -2119,11 +2190,36 @@ class SlowAgent:
 
 两者路由由任务类型决定，不需要在帧层面做复杂路由。
 
-### 11.2 Slow Agent 的两类 Loop
+### 11.2 Slow Agent 的 Loop 层级
 
-Slow Agent 内部根据任务类型启动不同 Loop：
+Slow Agent 的 Loop 应按层级理解，而不是把所有 loop 名称放在同一层：
 
-**One-shot Loop（一次性任务）**：
+```
+SlowLoop
+  ├─ OneShotLoop
+  │    - 一次性任务
+  │    - 规划 -> 执行 -> 完成
+  │
+  └─ StreamingLoop
+       - 持续接收外部信号
+       - observe -> decide -> act / wait
+       - 可长期运行，可暂停恢复
+       ├─ PassiveStreamingLoop
+       │    - 被动累积 / 聚合
+       │    - 例：MeetingMinutesLoop
+       │
+       └─ ReactiveStreamingLoop
+            - 主动指令 + 外部反馈闭环
+            - 例：VisualGuidanceLoop
+```
+
+也就是说：
+
+- `StreamingLoop` 是上位抽象
+- `VisualGuidanceLoop` 是 `ReactiveStreamingLoop` 的一个实现
+- `MeetingMinutesLoop` 不是和 `VisualGuidanceLoop` 同一种 loop，它属于被动累积型 streaming
+
+#### OneShotLoop（一次性任务）
 
 ```
 Fast → Slow: handoff { task_id, goal }
@@ -2133,40 +2229,58 @@ Fast → Slow: handoff { task_id, goal }
 
 - 例：设闹钟、搜天气、查日历
 
-**Streaming Loop（持续感知任务）**：
+#### StreamingLoop（持续感知任务）
 
 ```
 Fast → Slow: handoff { task_id, goal, loop_type="streaming" }
-  → Slow 启动对应 loop 类型
-  → 摄像头帧持续进入 loop
-  → VL 模型作为 loop 反馈驱动决策
+  → Slow 创建具体的 streaming loop 子类
+  → 外部信号（视频帧 / transcript / timer）持续进入 loop
+  → loop 根据任务类型选择 observe / aggregate / react
   → 主动发 TTS / 等待 / 结束
 ```
 
-Slow Agent 的 Loop 子类型：
+#### StreamingLoop 的两种子类型
 
 ```
-Slow Agent
-  ├─ MeetingMinutesLoop（被动累积型）
-  │    - 累积 ASR transcript + 定期 frame summary
-  │    - VL 作用：定期摘要关键画面（幻灯片、白板）
-  │    - 用户触发"总结" → 聚合输出
+StreamingLoop
+  ├─ PassiveStreamingLoop
+  │    - 目标：持续累积信息，不主动驱动用户动作
+  │    - 输入：ASR transcript / frame summary / timer
+  │    - 输出：阶段性摘要 / 任务产物
+  │    - 代表：MeetingMinutesLoop
   │
-  └─ VisualGuidanceLoop（主动观察型）
-       - Agent 指令 + VL 反馈驱动
-       - VL 模型作为 loop 传感器
-       - 主动控制 TTS 输出节奏
+  └─ ReactiveStreamingLoop
+       - 目标：系统发指令，环境反馈驱动下一步决策
+       - 输入：视频帧 / 用户动作 / 环境状态
+       - 输出：纠错 / 下一步指令 / 暂停让 Fast 接管
+       - 代表：VisualGuidanceLoop
 ```
 
-### 11.3 VisualGuidanceLoop 核心结构
+#### MeetingMinutesLoop（PassiveStreamingLoop 示例）
 
-**核心理念**：指令下发 + VL 模型作为 loop 的反馈传感器，类似强化学习的环境观测。
+```
+MeetingMinutesLoop
+  → 持续累积 ASR transcript
+  → 定期抽取关键帧并生成 frame summary
+  → 周期性压缩为结构化 notes
+  → 用户触发“总结 / 导出”时聚合输出
+```
+
+它的特点是：
+
+- 重点是“持续收集和压缩”
+- 不主动指挥用户做动作
+- 不依赖逐帧正确/错误反馈
+
+### 11.3 VisualGuidanceLoop（ReactiveStreamingLoop）核心结构
+
+**核心理念**：指令下发 + VL 模型作为 loop 的反馈传感器，形成主动闭环。
 
 ```
 传统 Agent Loop（确定性反馈）：
   Agent → execute_tool() → 返回值 → Agent 决策
 
-VisualGuidanceLoop（VL 观测反馈）：
+ReactiveStreamingLoop（环境反馈）：
   Agent → speak("拧开机油盖") → 用户执行动作
   → VL 模型 observe(frame) → 返回 {status, correctness}
   → Agent 决策下一步
@@ -2175,7 +2289,7 @@ VisualGuidanceLoop（VL 观测反馈）：
 ```python
 class VisualGuidanceLoop:
     """
-    视觉指导任务的 Agent Loop
+    ReactiveStreamingLoop 的具体实现：视觉指导任务
     驱动源：VL 模型的观测反馈，不是 TTS 完成事件
     """
     
@@ -2230,7 +2344,9 @@ class VisualGuidanceLoop:
 
 **TTS 和 VL 观测是并行的**：TTS 发出去之后，Agent 不等播完就继续监听 VL 反馈，因为用户可能边听边动作。
 
-### 11.4 VL 模型设计
+### 11.4 VisionSensor 设计
+
+`VisionSensor` 是 `ReactiveStreamingLoop` 的观测器，不是整个 `StreamingLoop` 的同义词。
 
 **帧率策略**：云端 VL 调用成本高，采用降频监控。
 
@@ -2272,7 +2388,7 @@ class VisionSensor:
 
 **协作原则**：
 - Fast Agent 处理用户主动对话（turn-bound）
-- Slow Loop 处理任务本身的执行
+- Slow Loop 处理后台任务本身的执行
 - 两者共享同一个 WebSocket 连接，共享同一个 session
 
 **Fast → Slow 切换（handoff）**：
@@ -2291,7 +2407,7 @@ class SlowAgent:
 
 **Fast ← Slow 切换（yield）**：
 
-当 VL 观测到 `status="confused"` 或用户主动说话时，Slow Loop 暂停：
+当 `ReactiveStreamingLoop` 观测到 `status="confused"` 或用户主动说话时，Slow Loop 暂停：
 
 ```python
 class VisualGuidanceLoop:
@@ -2314,7 +2430,7 @@ class VisualGuidanceLoop:
         self.state = "running"
 ```
 
-Fast Agent 收到通知后，用户说话 → Fast 处理 → 恢复 Slow Loop：
+Fast Agent 收到通知后，用户说话 → Fast 处理 → 恢复对应的 `ReactiveStreamingLoop`：
 
 ```python
 # Fast Agent 侧
@@ -2335,7 +2451,7 @@ async def handle_turn(self, msg):
 
 ```python
 class SlowAgent:
-    active_loops: dict[str, VisualGuidanceLoop]
+    active_loops: dict[str, StreamingLoop]
 
 # 端侧消息带 task_id
 # { "type": "video_frame", "task_id": "meeting_001", "data": "..." }
@@ -2484,9 +2600,9 @@ class VisionSensor:
         return self._last_observation
 ```
 
-### 11.8 Memory 系统的实际使用场景
+### 11.8 Long-term Memory 的实际使用场景
 
-**Fast Agent 读取 Memory：**
+**Fast Agent 读取 Long-term Memory：**
 
 ```python
 class FastAgent:
@@ -2511,7 +2627,7 @@ class FastAgent:
         ...
 ```
 
-**Slow Agent 写入 Memory：**
+**Slow Agent 写入 Long-term Memory：**
 
 ```python
 class SlowAgent:
@@ -2542,7 +2658,7 @@ class SlowAgent:
         })
 ```
 
-**Memory 检索策略：**
+**Long-term Memory 检索策略：**
 
 ```python
 class MemorySystem:
@@ -2582,7 +2698,7 @@ class MemorySystem:
         return [r[1] for r in results[:limit]]
 ```
 
-**Memory 过期和清理：**
+**Long-term Memory 过期和清理：**
 
 ```python
 class MemorySystem:
@@ -2613,18 +2729,18 @@ class MemorySystem:
 
 ---
 
-## 十二、参考架构
+## 十三、参考架构
 
 ### 13.1 Claude Code（Anthropic）
 
-源码路径：`/Users/chengqinglin/Documents/xiaoyi_live/src/`
+参考路径：`/Users/chengqinglin/Documents/xiaoyi_live/reference/claude-code/`
 
 | 模块 | Claude Code | 本文借鉴 |
 |------|------------|---------|
 | Agent Loop | `query.ts` while 循环 + 状态机 | **Fast Agent 同步 loop** |
 | Tool 接口 | `Tool.ts` buildTool() 工厂 | Skill Registry buildSkill() |
 | Task 状态 | `Task.ts` pending/running/completed/failed/killed | Task Manager |
-| Memory | `memoryTypes.ts` 四类记忆 + prompt 注入 | Memory System |
+| Memory | `memoryTypes.ts` 四类记忆 + prompt 注入 | Long-term Memory 设计 |
 | Agent 通信 | Mailbox 文件队列 + AsyncLocalStorage | 消息信封格式（内存回调） |
 | Background Task | `framework.ts` 1s 轮询 + 消息队列 | `task_event` 回调 |
 | In-process Teammate | `spawnMultiAgent.ts` AsyncLocalStorage | 同进程快慢隔离 |
@@ -2633,18 +2749,7 @@ class MemorySystem:
 
 | 模块 | OpenClaw | 本文借鉴 |
 |------|---------|---------|
-| Memory | 双层 markdown + SQLite | Memory 文件结构 |
+| Memory | 双层 markdown + SQLite | Long-term Memory 文件结构 |
 | Skills | Skills as Markdown | 用户自定义 Skill |
 | 执行隔离 | Docker 容器 | Python Executor 复用 Bash 沙箱 |
 | 事件驱动 | Gateway 收到消息激活 loop | 收到 handoff 激活 Slow Agent |
-
----
-
-## 十三、待讨论
-
-以下模块尚未完全确定，待后续讨论：
-
-1. ~~**Manifest 同步机制**~~ — 已确定：v1 启动同步（manifest.json），v2 热更新（回调机制）
-2. ~~**视频流输入**~~ — 已确定：Turn-bound（Fast Agent 直接调 VL）+ Streaming（Slow Agent VL反馈驱动 Loop）
-3. ~~**Python Executor 沙箱细节**~~ — 已确定：复用 Bash 沙箱，Python 层只做 import 白名单 + helpers 注入
-4. ~~**端侧 HarmonyOS 适配**~~ — 已确定：四个核心能力（音频推流、TTS播放、视频推流、聊天交互），对 Fast/Slow 架构透明
