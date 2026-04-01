@@ -77,11 +77,12 @@
 | SlowLoop | Slow Agent 内部执行任务的总称 |
 | OneShotLoop | 一次性任务 loop，规划后执行，完成即结束 |
 | StreamingLoop | 持续接收外部输入的 loop，上位抽象 |
-| PassiveStreamingLoop | 被动累积型 streaming loop，持续收集和压缩信息，不主动驱动用户动作 |
-| ReactiveStreamingLoop | 反应式 streaming loop，系统发指令，环境反馈驱动下一步动作 |
-| MeetingMinutesLoop | `PassiveStreamingLoop` 的实现，用于会议记录/摘要累积 |
-| VisualGuidanceLoop | `ReactiveStreamingLoop` 的实现，用于物理世界指导闭环 |
-| VisionSensor | `ReactiveStreamingLoop` 的观测器，负责按频率读取并分析视频帧 |
+| AccumulationLoop | 以累积和压缩状态为主的 streaming primitive |
+| MonitoringLoop | 以检测条件是否命中、并在命中时触发事件为主的 streaming primitive |
+| GuidanceLoop | 以主动发指令、再根据环境反馈调整下一步为主的 streaming primitive |
+| MeetingMinutesLoop | `AccumulationLoop` 的实现，用于会议记录/摘要累积 |
+| VisualGuidanceLoop | `GuidanceLoop` 的实现，用于物理世界指导闭环 |
+| VisionSensor | `MonitoringLoop / GuidanceLoop` 可复用的观测器，负责按频率读取并分析视频帧 |
 
 ### 2.3 任务与事件
 
@@ -916,7 +917,7 @@ class SlowAgent:
         return restored
 ```
 
-#### 4.2.8 Reactive Streaming Loop 示例（VisualGuidanceLoop）
+#### 4.2.8 GuidanceLoop 示例（VisualGuidanceLoop）
 
 **场景：** 指导类任务（如修车指导），Slow Agent 下发指令后，需要通过视频流实时观察执行结果来决定下一步。
 
@@ -2242,22 +2243,27 @@ SlowLoop
   │
   └─ StreamingLoop
        - 持续接收外部信号
-       - observe -> decide -> act / wait
+       - observe -> update state -> evaluate trigger -> act / wait
        - 可长期运行，可暂停恢复
-       ├─ PassiveStreamingLoop
-       │    - 被动累积 / 聚合
+       ├─ AccumulationLoop
+       │    - 以累积和压缩状态为主
        │    - 例：MeetingMinutesLoop
        │
-       └─ ReactiveStreamingLoop
-            - 主动指令 + 外部反馈闭环
+       ├─ MonitoringLoop
+       │    - 以检测条件命中并触发事件为主
+       │
+       └─ GuidanceLoop
+            - 主动指令 + 环境反馈闭环
             - 例：VisualGuidanceLoop
 ```
 
 也就是说：
 
 - `StreamingLoop` 是上位抽象
-- `VisualGuidanceLoop` 是 `ReactiveStreamingLoop` 的一个实现
-- `MeetingMinutesLoop` 不是和 `VisualGuidanceLoop` 同一种 loop，它属于被动累积型 streaming
+- `Accumulation / Monitoring / Guidance` 是三种基础 streaming primitive
+- `VisualGuidanceLoop` 是 `GuidanceLoop` 的一个实现
+- `MeetingMinutesLoop` 是 `AccumulationLoop` 的一个实现
+- 复杂物理世界任务可以在同一生命周期内切换 loop mode，而不要求从开始到结束只属于一种 primitive
 
 #### OneShotLoop（一次性任务）
 
@@ -2279,24 +2285,29 @@ Fast → Slow: handoff { task_id, goal, loop_type="streaming" }
   → 主动发 TTS / 等待 / 结束
 ```
 
-#### StreamingLoop 的两种子类型
+#### StreamingLoop 的三种基础 primitive
 
 ```
 StreamingLoop
-  ├─ PassiveStreamingLoop
-  │    - 目标：持续累积信息，不主动驱动用户动作
+  ├─ AccumulationLoop
+  │    - 主职责：持续累积信息，并维护越来越好的状态表示
   │    - 输入：ASR transcript / frame summary / timer
   │    - 输出：阶段性摘要 / 任务产物
   │    - 代表：MeetingMinutesLoop
   │
-  └─ ReactiveStreamingLoop
-       - 目标：系统发指令，环境反馈驱动下一步决策
+  ├─ MonitoringLoop
+  │    - 主职责：持续判断是否命中条件，并在命中时触发事件
+  │    - 输入：视频帧 / 音频事件 / 传感器状态 / timer
+  │    - 输出：事件、告警、计数变化、即时通知
+  │
+  └─ GuidanceLoop
+       - 主职责：系统发指令，环境反馈驱动下一步决策
        - 输入：视频帧 / 用户动作 / 环境状态
        - 输出：纠错 / 下一步指令 / 暂停让 Fast 接管
        - 代表：VisualGuidanceLoop
 ```
 
-#### MeetingMinutesLoop（PassiveStreamingLoop 示例）
+#### MeetingMinutesLoop（AccumulationLoop 示例）
 
 ```
 MeetingMinutesLoop
@@ -2312,7 +2323,29 @@ MeetingMinutesLoop
 - 不主动指挥用户做动作
 - 不依赖逐帧正确/错误反馈
 
-### 11.3 VisualGuidanceLoop（ReactiveStreamingLoop）核心结构
+#### MonitoringLoop 示例
+
+```
+MonitoringLoop
+  → 持续读取视频帧/事件流
+  → 判断是否命中预设条件
+  → 命中后记录 event / 计数 / 触发提醒
+  → 未命中则继续等待
+```
+
+典型场景：
+
+- “帮我看看老板来过几次工位”
+- “有人靠近设备就提醒我”
+- “监控这个区域有没有异常”
+
+它的特点是：
+
+- 重点是“检测是否该触发”
+- 每轮 loop 的关键不是压缩内容，而是判断是否要反应
+- 可以只记事件不提醒，也可以即时提醒
+
+### 11.3 VisualGuidanceLoop（GuidanceLoop）核心结构
 
 **核心理念**：指令下发 + VL 模型作为 loop 的反馈传感器，形成主动闭环。
 
@@ -2320,7 +2353,7 @@ MeetingMinutesLoop
 传统 Agent Loop（确定性反馈）：
   Agent → execute_tool() → 返回值 → Agent 决策
 
-ReactiveStreamingLoop（环境反馈）：
+GuidanceLoop（环境反馈）：
   Agent → speak("拧开机油盖") → 用户执行动作
   → VL 模型 observe(frame) → 返回 {status, correctness}
   → Agent 决策下一步
@@ -2329,7 +2362,7 @@ ReactiveStreamingLoop（环境反馈）：
 ```python
 class VisualGuidanceLoop:
     """
-    ReactiveStreamingLoop 的具体实现：视觉指导任务
+    GuidanceLoop 的具体实现：视觉指导任务
     驱动源：VL 模型的观测反馈，不是 TTS 完成事件
     """
     
@@ -2386,7 +2419,7 @@ class VisualGuidanceLoop:
 
 ### 11.4 VisionSensor 设计
 
-`VisionSensor` 是 `ReactiveStreamingLoop` 的观测器，不是整个 `StreamingLoop` 的同义词。
+`VisionSensor` 是 `MonitoringLoop / GuidanceLoop` 可复用的观测器，不是整个 `StreamingLoop` 的同义词。
 
 **帧率策略**：云端 VL 调用成本高，采用降频监控。
 
@@ -2447,7 +2480,7 @@ class SlowAgent:
 
 **Fast ← Slow 切换（yield）**：
 
-当 `ReactiveStreamingLoop` 观测到 `status="confused"` 或用户主动说话时，Slow Loop 暂停：
+当 `GuidanceLoop` 观测到 `status="confused"` 或用户主动说话时，Slow Loop 暂停：
 
 ```python
 class VisualGuidanceLoop:
@@ -2470,7 +2503,7 @@ class VisualGuidanceLoop:
         self.state = "running"
 ```
 
-Fast Agent 收到通知后，用户说话 → Fast 处理 → 恢复对应的 `ReactiveStreamingLoop`：
+Fast Agent 收到通知后，用户说话 → Fast 处理 → 恢复对应的 `GuidanceLoop`：
 
 ```python
 # Fast Agent 侧
