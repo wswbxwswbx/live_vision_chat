@@ -216,7 +216,7 @@
 1. **对话**：接收用户语音，生成回复，播报 TTS
 2. **转发**：自己搞不定的，handoff 给慢系统
 
-快系统**不执行**复杂任务，**不维护**长期记忆，**不写** memory 文件。
+快系统**不执行**复杂任务，**不维护**长期记忆，**不写** long-term memory 文件。
 
 ### 3.2 能处理的范围
 
@@ -618,7 +618,7 @@ class TTSQueue:
 3. **生成用户自定义 skill**：对话中学习并扩展能力
 4. **后台任务**：用户不等结果，异步执行
 
-慢系统是唯一能写 memory 文件的系统。
+慢系统是唯一能写 long-term memory 文件的系统。
 
 ### 4.2 Agent Loop 状态机
 
@@ -2203,7 +2203,11 @@ class SlowAgent:
             self.update_checkpoint(task_id, step, result)
         
         # 完成
-        await self.callbacks.on_done(task_id, result)
+        await self.callbacks.on_event(
+            task_id=task_id,
+            event_kind="completed",
+            result=result
+        )
     
     async def on_resume(self, task_id, user_input):
         # 恢复执行
@@ -2281,7 +2285,7 @@ Fast → Slow: handoff { task_id, goal }
 Fast → Slow: handoff { task_id, goal, loop_type="streaming" }
   → Slow 创建具体的 streaming loop 子类
   → 外部信号（视频帧 / transcript / timer）持续进入 loop
-  → loop 根据任务类型选择 observe / aggregate / react
+  → loop 根据任务类型进入 accumulation / monitoring / guidance mode
   → 主动发 TTS / 等待 / 结束
 ```
 
