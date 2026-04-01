@@ -133,36 +133,76 @@
 
 ```
 端侧（HarmonyOS）
-  │
-  │  WebSocket：turn / handoff_resume / stop_speech / request_to_speak
-  ▼
-┌─────────────────────────────────────────────┐
-│           云侧                  │
-│  ┌─────────────────────────────────────┐   │
-│  │     Fast Agent Loop                  │   │
-│  │  - 对话（听 → 想 → 说）              │   │
-│  │  - 两轮内部规划（tool 调用 ≤2）       │   │
-│  │  - handoff 投递                      │   │
-│  └─────────────────────────────────────┘   │
-│                    │                        │
-│                    │ asyncio.create_task    │
-│                    │ handoff inbox         │
-│                    ▼                        │
-│  ┌─────────────────────────────────────┐   │
-│  │     Slow Agent Loop                  │   │
-│  │  - Skill Registry                   │   │
-│  │  - Python Executor                  │   │
-│  │  - Task Manager                    │   │
-│  │  - Memory System                   │   │
-│  └─────────────────────────────────────┘   │
-│                    │                        │
-│                    │ task_event             │
-│                    │ callbacks.on_event     │
-│                    ▼                        │
-│              Fast Agent 接收结果            │
-│              找对话间隙插入播报             │
-└─────────────────────────────────────────────┘
+  ├─ Audio In / Push-to-talk
+  ├─ Audio Out / TTS 播放队列
+  ├─ Video Stream / Camera
+  ├─ Tool Executor
+  └─ Chat UI
+          │
+          │ WebSocket
+          │ turn / handoff_resume / request_to_speak / stop_speech /
+          │ tool_result / video_frame
+          ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                            云侧 Runtime                          │
+│                                                                  │
+│  ┌──────────────────────┐                                        │
+│  │ Protocol Router      │                                        │
+│  │ - session 绑定       │                                        │
+│  │ - 消息分发           │                                        │
+│  │ - interrupt 处理     │                                        │
+│  └──────────────────────┘                                        │
+│             │                                                    │
+│      ┌──────┴──────┐                                             │
+│      ▼             ▼                                             │
+│  ┌──────────────────────┐    handoff / task_event / yield       │
+│  │ Fast Agent Runtime   │◄──────────────────────────────────┐    │
+│  │ - live dialog loop   │                                   │    │
+│  │ - fast tools         │──────────────────────────────┐     │    │
+│  │ - handoff policy     │                              │     │    │
+│  └──────────────────────┘                              │     │    │
+│             │                                          │     │    │
+│             │ 读写                                     │     │    │
+│             ▼                                          ▼     │    │
+│  ┌────────────────────────────────────────────────────────┐   │    │
+│  │ Shared Runtime Layer                                  │   │    │
+│  │ - Conversation State                                  │   │    │
+│  │ - Task Registry                                       │   │    │
+│  │ - Checkpoint Store                                    │   │    │
+│  │ - Event Dispatcher                                    │   │    │
+│  └────────────────────────────────────────────────────────┘   │    │
+│             ▲                                          ▲     │    │
+│             │ 读                                       │写    │    │
+│             │                                          │     │    │
+│  ┌────────────────────────────────────────────────────────┐   │    │
+│  │ Long-term Memory Layer                               │   │    │
+│  │ - user / feedback / project / reference              │   │    │
+│  └────────────────────────────────────────────────────────┘   │    │
+│                                                                │    │
+│  ┌──────────────────────────────────────────────────────────┐  │    │
+│  │ Slow Agent Runtime                                      │──┘    │
+│  │ - OneShotLoop Runner                                    │       │
+│  │ - StreamingLoop Runner                                  │       │
+│  │ - VisionSensor                                          │       │
+│  │ - Skill Registry                                        │       │
+│  │ - Python Executor                                       │       │
+│  └──────────────────────────────────────────────────────────┘       │
+│                          ▲                                          │
+│                          │ video_frame(task_id) / tool_result       │
+└──────────────────────────┼──────────────────────────────────────────┘
+                           │
+                           └── 端侧按 task_id 绑定视频流和工具结果
 ```
+
+**运行时说明：**
+
+1. 端侧所有输入先进入 `Protocol Router`，由它按 session 和消息类型路由。
+2. `Fast Agent Runtime` 负责 live 对话、即时回复和 handoff 决策。
+3. `Slow Agent Runtime` 负责 `OneShotLoop` 和 `StreamingLoop` 两类后台执行。
+4. `Shared Runtime Layer` 是运行时真相源，保存 `Conversation State / Task Registry / Checkpoint / Event Dispatcher`。
+5. `Long-term Memory Layer` 只保存跨会话仍然有价值的信息，不保存当前运行态。
+6. 视频流和端侧工具结果直接按 `task_id` 路由到对应的 `StreamingLoop` 或 Slow 任务实例。
+7. Fast 和 Slow 之间不直接共享内部对象，而是通过 `handoff / task_event / yield-resume` 协议协作。
 
 ---
 
