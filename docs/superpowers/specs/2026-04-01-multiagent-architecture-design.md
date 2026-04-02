@@ -1,7 +1,7 @@
 # Multi-Agent 语音助手架构设计
 
-**版本**：v2.0
-**日期**：2026-04-01
+**版本**：v2.1
+**日期**：2026-04-02
 **状态**：设计完成
 
 ---
@@ -95,6 +95,8 @@
 | event_kind | `task_event` 的事件类型，如 `accepted` / `progress` / `need_user_input` / `completed` |
 | supersede | 新任务执行替代旧 run，旧 run 不再继续推进 |
 | checkpoint | Slow loop 的执行快照，用于暂停、恢复、重试和崩溃恢复 |
+| tool_call | 一次具体的工具调用实例，带 `call_id` 和独立生命周期 |
+| tool_call_state | 单个工具调用的执行状态，如 `queued / running / paused / waiting_approval / completed / failed / cancelled` |
 
 ### 2.4 控制权与状态
 
@@ -665,6 +667,38 @@ class DeliveryState(Enum):
 | WAITING_WORLD | RUNNING / PAUSED / CANCELLED / SUPERSEDED | 新观察到达 / Fast 接管 / 取消 / 替代 |
 | PAUSED | RUNNING / CANCELLED / SUPERSEDED | 恢复执行 / 取消 / 替代 |
 | FAILED | QUEUED | 重试 |
+
+#### 4.2.1.b 工具调用级状态机
+
+任务级状态机描述的是一个 task/run 的生命周期；双向工具执行还需要一个更细粒度的
+`tool_call_state`，否则 `cancel_tool`、迟到的 `tool_result`、重连恢复都会缺少真相源。
+
+```python
+class ToolCallState(Enum):
+    QUEUED           = "queued"             # 已创建，尚未下发到执行器
+    RUNNING          = "running"            # 执行中
+    WAITING_APPROVAL = "waiting_approval"   # 等待端侧权限/用户确认
+    PAUSED           = "paused"             # 被显式暂停
+    COMPLETED        = "completed"          # 正常完成，终态
+    FAILED           = "failed"             # 执行失败，终态
+    CANCELLED        = "cancelled"          # 被取消，终态
+```
+
+**VALID_TRANSITIONS 表：**
+
+| tool_call_state | 允许的下一状态 | 触发条件 |
+|----------------|------------------|---------|
+| QUEUED | RUNNING / CANCELLED | 下发执行 / 尚未开始前被取消 |
+| RUNNING | WAITING_APPROVAL / PAUSED / COMPLETED / FAILED / CANCELLED | 权限确认 / 暂停 / 完成 / 失败 / 取消 |
+| WAITING_APPROVAL | RUNNING / FAILED / CANCELLED | 批准继续 / 拒绝 / 取消 |
+| PAUSED | RUNNING / CANCELLED | 恢复 / 取消 |
+
+**一致性规则：**
+
+- `COMPLETED / FAILED / CANCELLED` 是工具调用终态
+- 到达终态后，后续迟到的 `tool_progress / tool_result / tool_error` 一律丢弃并记日志
+- `cancel_tool` 成功提交后，以 `CANCELLED` 为准；除非工具在取消前已经被 Runtime 原子标记为 `COMPLETED`
+- `pause_tool / resume_tool` 只允许发给声明支持该能力的工具
 
 #### 4.2.2 Loop 内状态机
 
@@ -1580,6 +1614,45 @@ class WebSocketClient:
 }
 ```
 
+### 6.3.b Runtime Store: Tool Call Registry
+
+双向工具协议需要一个轻量的 `tool_call` 注册表，保存“调用级真相”，避免把工具中间态混进 task 摘要，也避免只靠内存里的 `active_calls`。
+
+```json
+{
+  "tool_calls": {
+    "call_001": {
+      "task_id": "repair_001",
+      "run_id": "run_009",
+      "tool_name": "camera_capture",
+      "target": "device",
+      "state": "waiting_approval",
+      "supports_pause": false,
+      "supports_resume": false,
+      "supports_cancel": true,
+      "approval_required": {
+        "kind": "device_permission",
+        "permission": "camera"
+      },
+      "last_progress": {
+        "status": "awaiting_camera_permission",
+        "updated_at": "2026-04-02T10:00:08Z"
+      },
+      "created_at": "2026-04-02T10:00:05Z",
+      "updated_at": "2026-04-02T10:00:08Z"
+    }
+  }
+}
+```
+
+**Tool Call Registry 规则：**
+
+- `tool_calls` 是工具调用级真相源，粒度低于 `tasks`、高于端侧执行器内部状态
+- `tasks` 只聚合任务摘要，不保存每个 `call_id` 的完整历史
+- Slow/Fast Runtime 在发送 `tool_call` 前先写入 `tool_calls`
+- 端侧执行器恢复连接后，可以按 `tool_calls` 判断哪些调用仍应继续、取消或忽略
+- `tool_calls` 可按终态和 TTL 清理，不进入 Long-term Memory
+
 ### 6.4 Long-term Memory
 
 Long-term Memory 只保存未来会话仍然有价值的信息，不保存当前任务运行态。
@@ -1597,8 +1670,9 @@ Long-term Memory 只保存未来会话仍然有价值的信息，不保存当前
 **一致性约束**：
 
 - `checkpoint` 是执行真相源
+- `tool_calls` 是工具调用级真相源
 - `tasks` 是给 Fast/UI 读取的摘要索引
-- Slow 必须先写 checkpoint，再更新 task registry
+- Slow 必须先写 checkpoint / tool_calls，再更新 task registry
 - Fast 不读取 checkpoint 内部细节，只读 registry / conversation state
 
 ---
@@ -1643,6 +1717,58 @@ manifest = registry.get_manifest()
 1. 你可以直接调这些工具（fast_tools）
 2. 这些工具需要 handoff（slow_tools）
 
+### 7.3 工具执行是双向闭环，不是单向 RPC
+
+这里参考 Claude Code 的一个重要设计点：工具执行不应被理解为
+`Agent -> 调工具 -> 返回结果`
+的单向调用，而应理解为一个可协商、可中断、可回传状态的执行闭环。
+
+**单向 RPC 心智模型：**
+
+```text
+Agent -> tool_call -> Tool Executor -> tool_result -> Agent
+```
+
+**双向闭环心智模型：**
+
+```text
+Agent -> tool_intent
+      -> Runtime / Permission / User / Device 协商
+      -> tool_call 执行
+      <- progress / approval_request / cancellation / failure / tool_result
+Agent 再根据这些反馈继续决策
+```
+
+这意味着工具层不是一个“调完等结果”的黑盒，而是 Slow/Fast Runtime 的一部分控制面。
+
+**为什么要这样设计：**
+
+- 用户可能在工具执行中插话或打断
+- 某些工具需要端侧权限确认或用户补充参数
+- StreamingLoop 中的工具往往不是一次性完成，而是持续产生进度和观测结果
+- 某个并行工具失败时，其他工具可能需要被取消，而不是继续消耗资源
+
+**对本项目的落地约束：**
+
+1. `tool_call` 只是执行开始，不代表这次调用一定会自然完成
+2. Runtime 可以反向向工具执行流注入控制信号：
+   - `tool_approval_required`
+   - `tool_approval_response`
+   - `cancel_tool`
+   - `pause_tool`
+   - `resume_tool`
+3. 工具执行器可以反向向 Runtime 回报状态，而不只是在结束时回一个最终结果：
+   - `tool_progress`
+   - `tool_result`
+   - `tool_error`
+4. Fast Agent 和 Slow Agent 都不应把工具当作纯同步函数，而应把它当作“带状态的任务通道”
+
+**架构结论：**
+
+- Fast Agent 更适合使用“短生命周期、可快速取消”的工具
+- Slow Agent 更适合使用“长生命周期、可持续回报进度/观测”的工具
+- 端侧执行器需要同时支持执行面和控制面，而不是只有 `execute()`
+
 **Manifest Schema**：
 
 ```json
@@ -1654,6 +1780,13 @@ manifest = registry.get_manifest()
     {
       "name": "text_search",
       "description": "搜索文本获取实时信息",
+      "capabilities": {
+        "supports_progress": false,
+        "supports_cancel": true,
+        "supports_pause": false,
+        "supports_resume": false,
+        "may_require_approval": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -1665,6 +1798,13 @@ manifest = registry.get_manifest()
     {
       "name": "image_search",
       "description": "识别人脸或物体",
+      "capabilities": {
+        "supports_progress": true,
+        "supports_cancel": true,
+        "supports_pause": false,
+        "supports_resume": false,
+        "may_require_approval": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -1681,6 +1821,13 @@ manifest = registry.get_manifest()
       "description": "设置闹钟提醒",
       "can_ask_upfront": true,
       "upfront_params": ["time", "date"],
+      "capabilities": {
+        "supports_progress": true,
+        "supports_cancel": true,
+        "supports_pause": false,
+        "supports_resume": false,
+        "may_require_approval": true
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -1941,6 +2088,53 @@ toolExecutor.register('camera_zoom_in', async () => {
 })
 ```
 
+### 8.4.1 端侧工具协议应按双向闭环设计
+
+上一节的示例是最简 happy path，但正式协议不应只支持
+`tool_call -> tool_result`
+这一条直线。
+
+对于摄像头、麦克风、系统设置、通知、定位、文件等端侧工具，云侧和端侧之间应该保留双向控制能力：
+
+- 云侧下发执行请求：`tool_call`
+- 端侧回报进度：`tool_progress`
+- 端侧请求权限或用户确认：`tool_approval_required`
+- 云侧取消执行：`cancel_tool`
+- 云侧暂停/恢复执行：`pause_tool / resume_tool`
+- 端侧结束并返回：`tool_result / tool_error`
+
+示例：
+
+```text
+云侧 -> tool_call(camera_stream_start, call_id=1)
+端侧 -> tool_progress(call_id=1, status="opening_camera")
+端侧 -> tool_result(call_id=1, result={"stream_id":"cam_001"})
+
+云侧 -> tool_call(camera_capture, call_id=2)
+端侧 -> tool_approval_required(call_id=2, permission="camera")
+云侧 -> tool_approval_response(call_id=2, approved=true)
+端侧 -> tool_result(call_id=2, result={"image":"base64..."})
+
+云侧 -> tool_call(vibrate_device, call_id=3)
+用户打断
+云侧 -> cancel_tool(call_id=3)
+端侧 -> tool_error(call_id=3, error="cancelled")
+```
+
+**设计要求：**
+
+- 每个端侧工具调用都必须有 `call_id`
+- 工具调用必须支持中间态，而不是只有开始和结束
+- 取消必须是显式协议动作，不能只靠连接断开隐式表达
+- StreamingLoop 绑定的工具应优先支持 `pause/resume/cancel`
+- 端侧工具执行器内部应维护 `active_calls`，而不是只暴露一个无状态 `execute()`
+- `pause_tool / resume_tool` 只能发给声明 `supports_pause / supports_resume` 的工具
+- 不支持 `pause` 的工具收到暂停请求时，Runtime 必须降级为：
+  - 若支持 `cancel`，改发 `cancel_tool`
+  - 若也不支持 `cancel`，则把该 task 标记为 `waiting_world` 或 `running`，并禁止新的同类调用重入
+- `tool_approval_required / tool_approval_response` 是唯一审批消息命名，不再使用 `approval_required`
+- 所有 `tool_progress / tool_result / tool_error` 都必须带 `call_id`
+
 ### 8.5 端侧需要关心的所有消息类型
 
 **收到 (云侧 → 端侧)：**
@@ -1949,6 +2143,10 @@ toolExecutor.register('camera_zoom_in', async () => {
 |---------|------|------|
 | `tts` | TTS 音频流 | 加入播放队列 |
 | `tool_call` | 工具调用请求 | 执行工具，返回 tool_result |
+| `cancel_tool` | 取消指定工具调用 | 尝试取消并回报结果 |
+| `pause_tool` | 暂停指定工具调用 | 暂停执行并保留上下文 |
+| `resume_tool` | 恢复指定工具调用 | 从暂停点继续 |
+| `tool_approval_response` | 对端侧权限/确认请求的答复 | 继续或终止执行 |
 | `start_camera_stream` | 开始摄像头推流 | 启动摄像头，按 fps 推流 |
 | `stop_camera_stream` | 停止摄像头推流 | 停止推流 |
 | `heartbeat` | 心跳保活 | 回复 heartbeat |
@@ -1960,6 +2158,9 @@ toolExecutor.register('camera_zoom_in', async () => {
 | `turn` | 用户对话 | 用户说话/文本输入 |
 | `handoff_resume` | 用户回复追问 | 用户回答后台任务的追问 |
 | `tool_result` | 工具执行结果 | 工具执行完成 |
+| `tool_progress` | 工具中间进度 | 长调用有阶段变化时 |
+| `tool_error` | 工具执行失败或被取消 | 执行失败/取消 |
+| `tool_approval_required` | 端侧工具需要权限或确认 | 执行前无法直接继续 |
 | `video_frame` | 视频帧 | 摄像头推流中 |
 | `stop_speech` | 用户打断 | 用户按下打断按钮 |
 | `request_to_speak` | 用户请求说话 | 用户按下说话按钮 |
