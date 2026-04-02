@@ -1,7 +1,7 @@
 # Talker 开发指南
 
 **面向**：后端开发  
-**版本**：v1.0 | 2026-04-02  
+**版本**：v1.1 | 2026-04-02  
 **详细设计**：[talker 模型设计.md](./talker%20模型设计.md)
 
 ---
@@ -208,7 +208,127 @@ LLM 返回 slow_tool 调用
 
 ---
 
-## 六、暂不实现（TODO）
+## 六、日志与追踪 ID
+
+### 6.1 ID 体系
+
+Talker 日志携带以下 ID，用于在并发场景和跨服务链路中定位问题：
+
+| ID | 类型 | 生成时机 | 生命周期 | 跨服务 | 含义 |
+|----|------|---------|---------|--------|------|
+| `session_id` | UUID | 服务端，WS 连接建立时 | 整个 WebSocket 连接 | 否 | 唯一标识一次物理连接。同一用户断线重连后 session_id 变化，但 dialog_id 可不变 |
+| `dialog_id` | 字符串 | 客户端生成 | 逻辑对话（可跨连接）| 否 | 标识一次逻辑对话，由端侧 SDK 维护。**不唯一**：客户端可能复用，不可单独作为追踪键 |
+| `trace_id` | UUID | 服务端，每次 `stop_speech` 时 | 单次 turn 处理全链路 | **是** | 一次用户输入从 ASR → LLM → TTS → handoff 的全链路 ID。写入 handoff 消息，Slow Agent 继承并在 task_event 回调时带回 |
+| `task_id` | 字符串 | Slow Agent 创建任务时 | 后台任务整个生命周期 | **是** | 业务级任务 ID（对应 `active_task_ids` 中的元素）。Slow → Talker 的 task_event 消息携带此 ID |
+
+**asyncio task name**（非业务 ID）：`asyncio.current_task().get_name()` 自动注入到日志，帮助区分同一时刻并发运行的协程任务，仅用于本地调试。
+
+**跨服务传播规则**：
+- Talker → Slow：handoff 消息中携带 `trace_id`
+- Slow → Talker：task_event 消息中携带 `task_id`（和原始 `trace_id`，如果 Slow 选择透传）
+- 两个 ID 组合可还原"用户输入 → 任务创建 → 任务完成"完整链路
+
+### 6.2 日志配置
+
+**依赖**：`structlog`，写入本地旋转文件，开发环境同时输出到 stdout。
+
+```python
+# talker/logging_config.py
+import logging
+import sys
+from logging.handlers import RotatingFileHandler
+import structlog
+
+def configure_logging(env: str = "dev") -> None:
+    # 文件 handler：logs/talker.log（10MB × 5）
+    file_handler = RotatingFileHandler(
+        "logs/talker.log", maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    # 错误单独写一份：logs/talker.error.log
+    error_handler = RotatingFileHandler(
+        "logs/talker.error.log", maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    error_handler.setLevel(logging.ERROR)
+
+    handlers: list[logging.Handler] = [file_handler, error_handler]
+    if env == "dev":
+        handlers.append(logging.StreamHandler(sys.stdout))
+
+    logging.basicConfig(level=logging.DEBUG, handlers=handlers, format="%(message)s")
+
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,   # 注入 bind_contextvars 绑定的字段
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        _add_asyncio_task_name,                    # 注入 asyncio task name
+    ]
+
+    if env == "dev":
+        processors = shared_processors + [structlog.dev.ConsoleRenderer()]
+    else:
+        processors = shared_processors + [structlog.processors.JSONRenderer()]
+
+    structlog.configure(
+        processors=processors,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+def _add_asyncio_task_name(logger, method_name, event_dict):
+    import asyncio
+    task = asyncio.current_task()
+    if task:
+        event_dict["asyncio_task"] = task.get_name()
+    return event_dict
+```
+
+### 6.3 在 Handler 中使用
+
+每次 `stop_speech` 入口绑定 `trace_id`，整个处理链路无需手动传递：
+
+```python
+import structlog
+from structlog.contextvars import bind_contextvars, clear_contextvars
+import uuid
+
+log = structlog.get_logger(__name__)
+
+async def on_stop_speech(self, msg: StopSpeechMessage):
+    clear_contextvars()
+    bind_contextvars(
+        session_id=msg.session_id,
+        dialog_id=msg.dialog_id,
+        trace_id=str(uuid.uuid4()),   # 本次 turn 的分布式追踪 ID
+    )
+    log.info("stop_speech.received", text_len=len(msg.text))
+    # ... LLM call，日志自动携带以上 3 个字段 ...
+    log.info("llm.response.done", tokens=response.usage.total_tokens)
+```
+
+handoff 时把 `trace_id` 写入消息体：
+```python
+handoff_msg = HandoffMessage(
+    task_type=...,
+    params=...,
+    trace_id=structlog.contextvars.get_contextvars().get("trace_id"),
+)
+```
+
+### 6.4 各级别日志规范
+
+| 级别 | 场景 |
+|------|------|
+| `DEBUG` | LLM prompt 内容、TTS 分片字节数、工具调用参数、状态机跳转明细 |
+| `INFO` | 消息收到/发出、状态转换（state A → B）、handoff 触发、session 创建/销毁 |
+| `WARNING` | interrupt_epoch 不匹配（丢弃响应）、history 截断至 20 轮、重连 |
+| `ERROR` | LLM 调用失败、TTS 失败、Slow 30s 超时、WebSocket 断连 |
+
+---
+
+## 七、暂不实现（TODO）
 
 | ID | 内容 |
 |----|------|

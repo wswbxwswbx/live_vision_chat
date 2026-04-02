@@ -1,6 +1,6 @@
 # Talker 模块设计文档
 
-**版本**：v2.12  
+**版本**：v2.13  
 **日期**：2026-04-02  
 **状态**：设计中  
 **来源**：提取自 `2026-04-01-multiagent-architecture-design.md`
@@ -348,7 +348,7 @@ class Talker:
                 logger.warning(f"dialog_id mismatch: {session.dialog_id} != {msg.dialog_id}")
                 return
             
-            # ========== 2. 并发锁保护 ==========
+            # ========== 2. 加锁：读取并清理状态（lock 只保护状态读写，不持有到 LLM 调用）==========
             async with session.lock:
                 # 3. 停止当前 TTS（如果正在播报）并清空队列中所有待播内容
                 if session.state == "responding":
@@ -363,6 +363,7 @@ class Talker:
                 
                 # 5. 清理音频缓冲区和视频帧
                 session.audio_buffer = []
+                vision_frame = session.context.get("vision_frame")
                 session.context["vision_frame"] = None
                 session.context["vision_mode"] = None
                 
@@ -371,30 +372,37 @@ class Talker:
                     await self._handle_param_answer(session, user_input)
                     return
                 
-                # 7. 更新对话状态
+                # 7. 更新对话状态，记录本轮 epoch（用于检测 LLM 响应是否已过期）
                 session.speaker_owner = "user"
-                session.interrupt_epoch += 1
-                
-                # 8. 检索 Long-term Memory
-                memories = await self.memory.search(query=user_input, limit=5)
-                
-                # 9. 构建 Prompt（注入记忆 + 对话历史 + 视频帧）
-                prompt = self._build_prompt(
-                    user_input, memories, session.context, session.history
-                )
-                
-                # 10. 调用 LLM（流式输出）
+                current_epoch = session.interrupt_epoch  # 快照，LLM 返回后对比
+                history_snapshot = list(session.history)  # 快照，避免 LLM 调用期间被修改
                 session.state = "responding"
-                response = await self.llm.call(prompt, tools=self.manifest, stream=True)
+            # ========== lock 释放：LLM 调用在锁外执行，不阻塞同 session 的 on_turn ==========
+            
+            # 8. 检索 Long-term Memory（锁外）
+            memories = await self.memory.search(query=user_input, limit=5)
+            
+            # 9. 构建 Prompt（注入记忆 + 对话历史快照 + 视频帧）
+            prompt = self._build_prompt(user_input, memories, {"vision_frame": vision_frame}, history_snapshot)
+            
+            # 10. 调用 LLM（流式输出，锁外）
+            response = await self.llm.call(prompt, tools=self.manifest, stream=True)
+            
+            # 11. 加锁：检查 epoch 是否过期，写回状态
+            async with session.lock:
+                if session.interrupt_epoch != current_epoch:
+                    # 用户在 LLM 调用期间发起了新的打断，此响应作废
+                    logger.info(f"Stale LLM response discarded (epoch mismatch) for {session.dialog_id}")
+                    return
                 
-                # 11. 追加到对话历史（供下轮使用）
+                # 12. 追加到对话历史
                 session.history.append({"role": "user", "content": user_input})
                 session.history.append({"role": "assistant", "content": response.content})
-                
-                # 12. TTS 输出
-                await self.speak(session, response, priority="normal")
                 session.speaker_owner = "fast"
                 session.state = "waiting_user"
+            
+            # 13. TTS 输出（锁外，避免 speak 阻塞锁）
+            await self.speak(session, response, priority="normal")
         
         except LLMError as e:
             logger.error(f"LLM call failed: {e}")
