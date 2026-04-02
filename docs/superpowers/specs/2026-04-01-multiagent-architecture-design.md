@@ -1940,6 +1940,39 @@ registry.subscribe(lambda m: fast_agent.reload_manifest(m))
 4. 聊天交互    → 实时显示对话、文本输入、工具执行状态
 ```
 
+### 8.1.1 开发顺序：先 Web Debug Client，再 HarmonyOS 客户端
+
+为了先把端云链路、协议和 Runtime 状态机跑通，第一阶段不要求先完成原生客户端。
+
+推荐顺序：
+
+1. **先做 Web Debug Client**
+   - 运行在浏览器里
+   - 提供文本输入、麦克风、摄像头、TTS 播放、消息日志、task/tool_call 状态面板
+   - 目标是快速验证 `turn / handoff / task_event / tool_call / tool_result / video_frame`
+2. **再做 HarmonyOS 客户端**
+   - 在协议已经稳定后，实现正式端侧体验
+   - 优先复用云侧协议和 Runtime，不重新设计消息模型
+
+**为什么这样安排：**
+
+- 浏览器调试更快，便于直接观察 WebSocket / WebRTC / DataChannel 消息
+- 可以先验证 `Fast Agent / Slow Agent / Runtime Store / Tool Call Registry` 的协作
+- 可以先暴露调试视图，直接看到 owner、task、checkpoint、tool_call 状态
+- 避免太早陷入原生端权限、打包、安装、设备兼容性问题
+
+**Web Debug Client 的定位：**
+
+- 它是“协议调试终端”，不是正式产品 UI
+- 它的职责是帮助系统联调，不承担最终交互体验设计
+- 只要协议和行为一致，浏览器端与 HarmonyOS 端可以共用同一套云侧接口
+
+**阶段目标：**
+
+- Phase 1：Web Debug Client + WebSocket，打通控制协议和最小媒体链路
+- Phase 2：在协议稳定后，引入 WebRTC 优化实时音视频
+- Phase 3：HarmonyOS 客户端接入同一协议，替换 Debug Client 的端侧能力
+
 ### 8.2 端侧架构
 
 ```
