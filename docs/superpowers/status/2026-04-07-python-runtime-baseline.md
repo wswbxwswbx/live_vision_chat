@@ -224,20 +224,55 @@ These are expected and do not invalidate the baseline.
 
 Next work should follow the design spec rather than inventing a new direction.
 
-### 7.1 Immediate Next Steps
+### 7.1 Immediate Priority Correction
+
+The next phase should **not** start from streaming work.
+
+Reason:
+
+- the current gateway, protocol, and demo client can already carry streaming-shaped input
+- but `FastRuntime`, `SlowRuntime`, and `TaskRuntime` are still skeletons
+- without a minimally real Fast/Slow runtime, streaming input would only be routed into an empty shell
+
+Therefore the correct next milestone is:
+
+- `M2: Minimum Real Fast/Slow Runtime`
+
+Only after that should the project move to:
+
+- `M3: Streaming Ingress + First AccumulationLoop`
+
+### 7.2 M2: Minimum Real Fast/Slow Runtime
+
+This should be the next implementation milestone.
+
+1. Make `FastRuntime` minimally real
+2. Make `SlowRuntime` minimally real for `OneShotLoop`-style tasks
+3. Implement the real `Fast -> Slow` handoff path
+4. Connect one real execution path through `packages/execution`
+
+Expected outcomes:
+
+- `FastRuntime` no longer always returns `stub`
+- simple requests can be answered directly by Fast
+- complex requests can create a slow task and return an immediate foreground acknowledgment
+- `SlowRuntime` can accept, run, and complete or wait a task
+- `task_event` and checkpoint updates become visible through snapshot and demo client panels
+
+### 7.3 M3: Streaming Ingress + First AccumulationLoop
+
+Streaming work should start only after `M2` is stable.
 
 1. Route `audio_chunk / video_frame` into runtime-observable state
-2. Add the first minimal streaming input consumption path
-3. Let `SlowRuntime` own the first real streaming task lifecycle
+2. Add the first real streaming input consumption path
+3. Let `SlowRuntime` own the first streaming task lifecycle
 4. Implement the first minimal `AccumulationLoop`
 
-### 7.2 After That
+Expected outcomes:
 
-1. Replace execution stubs with a real execution layer
-2. Replace memory stubs with a real long-term memory layer
-3. Expose richer runtime events to the demo client
-4. Implement `MonitoringLoop`
-5. Implement `GuidanceLoop`
+- media input no longer stops at the gateway
+- runtime state and snapshots can show recent streaming ingress
+- the first real streaming task can accumulate state and emit task events
 
 ### 7.3 What Should Not Be Reopened Right Now
 
