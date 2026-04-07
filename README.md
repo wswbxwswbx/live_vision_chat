@@ -12,6 +12,20 @@ This repository is the single source of truth for the `live_vision_chat` project
 
 - `docs/superpowers/specs/`
   - architecture and design specs
+- `apps/gateway`
+  - Python `FastAPI` ingress for health, snapshots, and session websocket endpoints
+- `apps/demo-client`
+  - React + Vite browser client for gateway/runtime integration debugging
+- `packages/protocol`
+  - Python protocol schema and parsing helpers
+- `packages/runtime_store`
+  - Python shared runtime state truth source
+- `packages/runtime_core`
+  - Python Fast/Slow runtime skeletons, registries, snapshots, and facade
+- `packages/execution`
+  - Python execution-layer stubs
+- `packages/memory`
+  - Python long-term memory stubs
 
 ## Reference Policy
 
@@ -26,3 +40,60 @@ Reference codebases are used for inspiration only. They are not the product sour
 - Use this repository as the main workspace going forward
 - Prefer updating docs here rather than under legacy local folders
 - Treat `docs/superpowers/specs/2026-04-01-multiagent-architecture-design.md` as the current architecture source of truth
+- Treat the Python packages as the formal implementation mainline
+
+## Python Workspace
+
+Run targeted or full Python verification from the worktree root:
+
+```bash
+corepack pnpm exec pytest packages apps/gateway/tests -q
+```
+
+Current Python foundation includes:
+
+- `protocol`
+- `runtime_store`
+- `runtime_core`
+- `gateway`
+- `execution`
+- `memory`
+
+## Local Debug Flow
+
+Start the Python gateway on port `3000` from the worktree root:
+
+```bash
+python -m apps.gateway.dev
+```
+
+Install demo-client dependencies:
+
+```bash
+cd apps/demo-client
+corepack pnpm install
+```
+
+Start the demo client:
+
+```bash
+corepack pnpm dev
+```
+
+Then open the Vite URL in a browser. The demo client will:
+
+- fetch `GET /sessions/:session_id/snapshot`
+- open `ws://<host>:3000/sessions/:session_id`
+- send `turn`, `audio_chunk`, and `video_frame`
+- render chat, conversation, tasks, checkpoints, and recent task events
+- play assistant text through browser `speechSynthesis`
+
+## Debug-Stage Media Transport
+
+The browser demo client uses a debug-stage transport compromise:
+
+- media travels over `WebSocket`
+- payloads are wrapped in structured messages with `base64` data
+- TTS currently uses browser `speechSynthesis`
+
+This is not the formal product target. Final product clients remain app-native, and the long-term architecture still expects a cleaner separation between control-plane traffic and production media transport.

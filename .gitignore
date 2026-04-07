@@ -1,4 +1,9 @@
+__pycache__/
+*.py[cod]
+node_modules/
+.pytest_cache/
+dist/
+*.tsbuildinfo
 .DS_Store
-.claude/
 .worktrees/
 reference/

@@ -1,0 +1,108 @@
+import pytest
+
+from runtime_store.memory_store import InMemoryRuntimeStore
+
+
+def _seed_conversation(store: InMemoryRuntimeStore, dialog_id: str = "dialog-1") -> None:
+    store.upsert_conversation(
+        dialog_id,
+        {
+            "dialog_id": dialog_id,
+            "speaker_owner": "fast",
+            "attention_owner": "fast",
+            "foreground_task_id": None,
+            "background_task_ids": [],
+            "interrupt_epoch": 0,
+        },
+        actor="system",
+    )
+
+
+@pytest.mark.asyncio
+async def test_accept_attaches_task_to_background_and_sets_attention_slow() -> None:
+    from runtime_core.task_runtime import TaskRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store)
+    task_runtime = TaskRuntime(store=store)
+
+    await task_runtime.accept(task_id="task-1", dialog_id="dialog-1")
+
+    conversation = store.get_conversation("dialog-1")
+
+    assert conversation is not None
+    assert conversation["attention_owner"] == "slow"
+    assert "task-1" in conversation["background_task_ids"]
+    assert store.get_task("task-1") == {
+        "task_id": "task-1",
+        "dialog_id": "dialog-1",
+        "status": "accepted",
+    }
+
+
+@pytest.mark.asyncio
+async def test_slow_runtime_run_once_completes_and_detaches_task() -> None:
+    from runtime_core.slow_runtime import SlowRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store)
+    runtime = SlowRuntime(store=store)
+
+    result = await runtime.run_once(task_id="task-1", dialog_id="dialog-1")
+
+    conversation = store.get_conversation("dialog-1")
+    task = store.get_task("task-1")
+
+    assert result.task_id == "task-1"
+    assert result.status == "completed"
+    assert conversation is not None
+    assert conversation["attention_owner"] == "fast"
+    assert conversation["background_task_ids"] == []
+    assert task == {
+        "task_id": "task-1",
+        "dialog_id": "dialog-1",
+        "status": "completed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_accept_rejects_rebinding_task_to_another_dialog() -> None:
+    from runtime_core.task_runtime import TaskRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store, "dialog-1")
+    _seed_conversation(store, "dialog-2")
+    store.upsert_task(
+        "task-1",
+        {
+            "task_id": "task-1",
+            "dialog_id": "dialog-1",
+            "status": "accepted",
+        },
+    )
+    task_runtime = TaskRuntime(store=store)
+
+    with pytest.raises(ValueError, match="belongs to dialog"):
+        await task_runtime.accept(task_id="task-1", dialog_id="dialog-2")
+
+
+@pytest.mark.asyncio
+async def test_complete_can_preserve_attention_when_requested() -> None:
+    from runtime_core.task_runtime import TaskRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store)
+    task_runtime = TaskRuntime(store=store)
+
+    await task_runtime.accept(task_id="task-1", dialog_id="dialog-1")
+    await task_runtime.complete(
+        task_id="task-1",
+        dialog_id="dialog-1",
+        release_attention=False,
+    )
+
+    conversation = store.get_conversation("dialog-1")
+
+    assert conversation is not None
+    assert conversation["attention_owner"] == "slow"
+    assert conversation["background_task_ids"] == []

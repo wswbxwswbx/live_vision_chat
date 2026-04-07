@@ -1,0 +1,14 @@
+[project]
+name = "live-vision-chat"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = [
+  ".",
+  "packages/protocol/src",
+  "packages/runtime_store/src",
+  "packages/runtime_core/src",
+  "packages/execution/src",
+  "packages/memory/src",
+]

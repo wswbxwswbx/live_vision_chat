@@ -1,7 +1,7 @@
 # Multi-Agent 语音助手架构设计
 
-**版本**：v2.1
-**日期**：2026-04-02
+**版本**：v2.2
+**日期**：2026-04-07
 **状态**：设计完成
 
 ---
@@ -54,8 +54,9 @@
 
 ### 1.5 参考架构
 
-- Claude Code（Anthropic）：任务/记忆/prompt 组织方式
-- OpenClaw：session/skills/streaming 基础设施启发
+- Claude Code（Anthropic）：主参考，决定 Fast/Slow、runtime core、tool orchestration、memory layering 的架构语义
+- claw-code-main：Python 工程化参考，借鉴 session、remote、workspace、执行边界的实现方式
+- cc-mini-main：Python 最小内核参考，借鉴 engine、session、permission、memory、coordinator 的轻量实现
 
 ---
 
@@ -206,6 +207,55 @@
 5. `Long-term Memory Layer` 只保存跨会话仍然有价值的信息，不保存当前运行态。
 6. 视频流和端侧工具结果直接按 `task_id` 路由到对应的 `StreamingLoop` 或 Slow 任务实例。
 7. Fast 和 Slow 之间不直接共享内部对象，而是通过 `handoff / task_event / yield-resume` 协议协作。
+
+### 3.1 Python-first 实施约束
+
+正式主干采用 **Python-first**，当前 TypeScript 实现只作为架构原型和联调样板，不作为后续正式主线继续扩展。
+
+约束如下：
+
+- 架构语义以 `reference/claude-code` 为主，不以现有 TS 原型或 Python reference 的局部实现细节为主
+- `reference/claw-code-main` 和 `reference/cc-mini-main` 只用于借鉴 Python 实现方式，不直接决定系统边界
+- 第一阶段部署允许单进程，但代码边界必须按可拆分服务设计
+- `gateway`、`runtime_core`、`runtime_store`、`execution`、`memory` 必须是清晰可分工的独立模块
+- 任何可恢复、可观测、可协作的运行态，都必须先写入 `Runtime Store`
+
+### 3.2 Python 主干推荐代码分层
+
+```text
+apps/
+  gateway/              # FastAPI ingress, HTTP/WS, session connection, snapshot API
+  debug_client/         # 调试终端，可先用 Web，后续可替换为正式端侧
+
+packages/
+  protocol/             # Pydantic 消息 schema
+  runtime_store/        # shared memory 真相源
+  runtime_core/         # FastRuntime / SlowRuntime / TaskRuntime / RuntimeFacade
+  execution/            # tool executor / slow task worker / loop worker
+  memory/               # long-term memory retrieval / writeback / pruning
+```
+
+分层原则：
+
+- `apps/gateway` 可以使用 `FastAPI + Pydantic + asyncio`
+- `packages/runtime_core`、`packages/runtime_store` 保持框架无关，只依赖纯 Python 域模型和接口
+- `packages/execution` 负责“怎么执行”，`runtime_core` 负责“做什么”和“状态推进到哪里”
+- `packages/memory` 独立于当前 turn/runtime state，不与 `Runtime Store` 混用
+- 后续多人协作时，以 package 边界拆分任务，而不是以单文件或单功能点拆分
+
+### 3.3 Python 并发模型
+
+正式主干采用混合并发模型：
+
+- `gateway / session / realtime protocol` 使用 `asyncio`
+- `Fast Runtime` 运行在异步主循环中，统一处理 turn、取消、超时和事件路由
+- `Slow Runtime` 由 `TaskRuntime` 驱动，其长任务、阻塞 I/O、重 CPU 工具通过 `execution` 层隔离到 worker 进程或独立 runner
+
+这保证：
+
+- 控制面适合实时流式协议
+- 执行面不会污染主事件循环
+- 第一阶段可单进程部署，后续也能平滑拆成多进程或多服务
 
 ---
 
@@ -1940,14 +1990,15 @@ registry.subscribe(lambda m: fast_agent.reload_manifest(m))
 4. 聊天交互    → 实时显示对话、文本输入、工具执行状态
 ```
 
-### 8.1.1 开发顺序：先 Web Debug Client，再 HarmonyOS 客户端
+### 8.1.1 开发顺序：先 Debug Client，再 HarmonyOS 客户端
 
 为了先把端云链路、协议和 Runtime 状态机跑通，第一阶段不要求先完成原生客户端。
+在 Python-first 主干下，Debug Client 可以先用 Web 形态实现，也可以后续补 CLI/桌面调试终端；它是联调工具，不是语言路线的主线。
 
 推荐顺序：
 
-1. **先做 Web Debug Client**
-   - 运行在浏览器里
+1. **先做 Debug Client（推荐先 Web）**
+   - 第一阶段建议运行在浏览器里
    - 提供文本输入、麦克风、摄像头、TTS 播放、消息日志、task/tool_call 状态面板
    - 目标是快速验证 `turn / handoff / task_event / tool_call / tool_result / video_frame`
 2. **再做 HarmonyOS 客户端**
@@ -1961,21 +2012,90 @@ registry.subscribe(lambda m: fast_agent.reload_manifest(m))
 - 可以先暴露调试视图，直接看到 owner、task、checkpoint、tool_call 状态
 - 避免太早陷入原生端权限、打包、安装、设备兼容性问题
 
-**Web Debug Client 的定位：**
+**Debug Client 的定位：**
 
 - 它是“协议调试终端”，不是正式产品 UI
 - 它的职责是帮助系统联调，不承担最终交互体验设计
 - 只要协议和行为一致，浏览器端与 HarmonyOS 端可以共用同一套云侧接口
 
+### 8.1.2 Demo Client 的调试阶段方案与正式目标
+
+仓库内新增的 `apps/demo-client` 应视为联调优先的轻量 Demo Client，而不是正式产品客户端。
+
+当前调试阶段方案：
+
+- 前端技术栈使用 `React + Vite`
+- 默认连接 Python `gateway`
+- 保留极轻的 `mock mode`，仅用于离线 UI 调整，不模拟完整 Runtime
+- 文本输入继续通过 `turn` 走现有控制协议
+- 麦克风输入采用持续采集 + 分片上行
+- 摄像头输入采用低帧率持续抓帧上行
+- 媒体消息先走 `WebSocket + 结构化消息 + base64 payload`
+- TTS 第一版先用浏览器 `speechSynthesis`，不要求云侧先回真实音频流
+
+正式目标方案：
+
+- 正式客户端仍然是各个 App，不是仓库内的 Demo Client
+- 媒体面和控制面需要分离设计
+- 媒体链路后续优先迁移到更适合实时产品的正式传输方案
+- Demo 阶段的消息语义必须向正式协议靠拢，避免后续切换时重做 Runtime 事件模型
+
+当前调试阶段允许妥协的部分：
+
+- 媒体传输实现
+- TTS 播放实现
+- 页面视觉形态
+
+当前调试阶段不应妥协的部分：
+
+- `session_id` 绑定
+- streaming 输入的持续性语义
+- `conversation / tasks / checkpoints / task_events` 的观测方式
+- 后续 `StreamingLoop / MonitoringLoop / GuidanceLoop` 所需的事件时序
+
 **阶段目标：**
 
-- Phase 1：Web Debug Client + WebSocket，打通控制协议和最小媒体链路
+- Phase 1：Python Gateway + Debug Client + WebSocket，打通控制协议和最小媒体链路
 - Phase 2：在协议稳定后，引入 WebRTC 优化实时音视频
 - Phase 3：HarmonyOS 客户端接入同一协议，替换 Debug Client 的端侧能力
 
 ### 8.2 端侧架构
 
 ```
+
+### 8.2.1 Demo Client 页面结构
+
+`apps/demo-client` 第一版建议采用三栏调试布局：
+
+- 顶栏：连接与媒体状态
+  - `gateway` 地址
+  - `session_id`
+  - `connected / reconnecting / mock`
+  - 麦克风状态
+  - 摄像头状态
+  - TTS 状态
+- 左栏：聊天与语音输出
+  - 聊天消息流
+  - 文本输入与 `turn` 发送
+  - assistant 文本回复
+  - 浏览器 TTS 播放状态
+- 中栏：媒体调试
+  - 摄像头预览
+  - 视频发送频率
+  - 音频分片发送节奏
+  - 最近一次媒体上行时间
+- 右栏：Runtime 状态
+  - `conversation`
+  - `tasks`
+  - `recent task_events`
+  - `checkpoint`
+  - 最近 `audio_chunk / video_frame` 摘要
+
+第一版不要求：
+
+- 音量条或波形图
+- 原始 JSON 抓包页
+- 正式产品化视觉设计
 HomePage (UI + 状态)
   │
   ├─ AudioStreamService     → 麦克风采集 → 实时推流到云侧
@@ -2000,14 +2120,25 @@ HomePage (UI + 状态)
 **1. 音频推流**
 
 ```
-麦克风 → PCM流 → [100ms分片] → WebSocket turn消息 → 云侧
+麦克风 → PCM流 → [100ms分片] → WebSocket audio_chunk 消息 → 云侧
 ```
 
 云侧可以发 `stop_speech` 中断采集/推流。
 
+调试阶段约束：
+
+- 必须使用持续分片语义，而不是“录一段再上传”
+- 首版可使用结构化消息和 `base64` 包裹 payload
+- 后续迁移正式媒体链路时，不改变音频分片在 Runtime 中的事件语义
+
 **2. TTS 播放**
 
-云侧返回 TTS 流，端侧实时播放。需要支持队列：
+调试阶段允许先不依赖云侧真实音频流。第一版可以由端侧根据 assistant 文本使用浏览器 `speechSynthesis` 播放，确保：
+
+- StreamingLoop 调试时有可听反馈
+- 不阻塞 Python 主干的媒体输出协议演进
+
+正式方案仍然是云侧返回真实 TTS 流并由端侧实时播放。届时需要支持队列：
 
 ```typescript
 class AudioPlaybackService {
@@ -2032,6 +2163,17 @@ class AudioPlaybackService {
 云侧统一发 `tts` 消息（无论是 Fast Agent 还是 Slow Agent），端侧只需要一个播放队列。
 
 **3. 视频推流**
+
+调试阶段：
+
+- 浏览器持续采集摄像头
+- 以前台固定低帧率抓帧
+- 通过 `video_frame` 消息持续上行
+
+正式方案：
+
+- 延续相同的 `session / task / loop` 绑定语义
+- 只替换媒体传输实现，不替换 Runtime 对视频输入的消费方式
 
 两种模式：
 - **按需**：`turn` 消息里带一帧 base64 图片
@@ -3042,25 +3184,36 @@ class MemorySystem:
 
 ## 十三、参考架构
 
-### 13.1 Claude Code（Anthropic）
+### 13.1 Claude Code（Anthropic，主参考）
 
-参考路径：`/Users/chengqinglin/Documents/xiaoyi_live/reference/claude-code/`
+参考路径：`reference/claude-code/`
 
 | 模块 | Claude Code | 本文借鉴 |
 |------|------------|---------|
-| Agent Loop | `query.ts` while 循环 + 状态机 | **Fast Agent 同步 loop** |
-| Tool 接口 | `Tool.ts` buildTool() 工厂 | Skill Registry buildSkill() |
-| Task 状态 | `Task.ts` pending/running/completed/failed/killed | Task Manager |
-| Memory | `memoryTypes.ts` 四类记忆 + prompt 注入 | Long-term Memory 设计 |
-| Agent 通信 | Mailbox 文件队列 + AsyncLocalStorage | 消息信封格式（内存回调） |
-| Background Task | `framework.ts` 1s 轮询 + 消息队列 | `task_event` 回调 |
-| In-process Teammate | `spawnMultiAgent.ts` AsyncLocalStorage | 同进程快慢隔离 |
+| Query / Runtime Core | `QueryEngine` 会话内执行态中枢 | `RuntimeFacade + FastRuntime + SlowRuntime + TaskRuntime` |
+| Tool 接口 | `Tool.ts` buildTool() 工厂 | Skill Registry / Tool Registry 统一接口 |
+| Tool Orchestration | 双向工具执行、审批、取消、流式结果 | `tool_call` 状态机与 execution control plane |
+| Task 状态 | 任务执行态、权限、回调与恢复语义 | `task / checkpoint / task_event / tool_call` 模型 |
+| Memory Layering | 运行态与长期记忆分层 | `Runtime Store + Long-term Memory` 双层设计 |
+| Remote Session | session / control plane / 远程事件桥接 | `gateway + protocol + runtime facade` 边界 |
 
-### 13.2 OpenClaw
+### 13.2 claw-code-main（Python 实现借鉴）
 
-| 模块 | OpenClaw | 本文借鉴 |
+参考路径：`reference/claw-code-main/`
+
+| 模块 | claw-code-main | 本文借鉴 |
 |------|---------|---------|
-| Memory | 双层 markdown + SQLite | Long-term Memory 文件结构 |
-| Skills | Skills as Markdown | 用户自定义 Skill |
-| 执行隔离 | Docker 容器 | Python Executor 复用 Bash 沙箱 |
-| 事件驱动 | Gateway 收到消息激活 loop | 收到 handoff 激活 Slow Agent |
+| Session / Remote | Python 版 session、remote、workspace 组织 | `gateway / runtime_core / execution` 的工程边界 |
+| 执行隔离 | Python 进程与执行器组织方式 | `execution` 层的 worker/runners 设计 |
+| 工程化分层 | Python 包与模块拆分方式 | 多人协作时的 package 切分参考 |
+
+### 13.3 cc-mini-main（Python 最小内核借鉴）
+
+参考路径：`reference/cc-mini-main/`
+
+| 模块 | cc-mini-main | 本文借鉴 |
+|------|-------------|---------|
+| Engine | `engine.py` tool loop + streaming API loop | Python 版 Fast/Slow 内核的最小事件循环参考 |
+| Session | `session.py` 持久化与恢复 | session snapshot / resume 的实现参考 |
+| Permission / Tools | `permissions.py`、`tools/` | tool approval 与执行器接口细节 |
+| Coordinator | `coordinator.py` worker 协作模式 | 后续 slow execution / multi-worker 设计参考 |
