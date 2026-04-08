@@ -50,6 +50,8 @@ export function App() {
         <ChatPanel
           messages={state.chatMessages}
           draft={draft}
+          pendingResumeTaskId={state.pendingResumeTaskId}
+          pendingResumeTitle={state.pendingResumeTitle}
           onDraftChange={setDraft}
           onSend={() => {
             if (draft.trim().length === 0) {
@@ -76,6 +78,8 @@ export function App() {
           tasks={state.tasks}
           recentTaskEvents={state.recentTaskEvents}
           lastCheckpoint={state.lastCheckpoint}
+          pendingResumeTaskId={state.pendingResumeTaskId}
+          pendingResumeTitle={state.pendingResumeTitle}
         />
       </div>
     </main>

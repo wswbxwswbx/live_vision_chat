@@ -44,6 +44,10 @@ export class MockClient {
     } satisfies AssistantTextMessage);
   }
 
+  async sendHandoffResume(sessionId: string, _taskId: string, text: string): Promise<void> {
+    await this.sendTurn(sessionId, text);
+  }
+
   async sendAudioChunk(_sessionId: string, _payload: AudioChunkPayload): Promise<void> {}
 
   async sendVideoFrame(_sessionId: string, _payload: VideoFramePayload): Promise<void> {}

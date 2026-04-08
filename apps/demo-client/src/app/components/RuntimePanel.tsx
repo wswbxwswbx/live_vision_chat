@@ -10,11 +10,24 @@ export function RuntimePanel(props: {
   tasks: SessionTaskSnapshot[];
   recentTaskEvents: TaskEventRecord[];
   lastCheckpoint: CheckpointRecord | null;
+  pendingResumeTaskId: string | null;
+  pendingResumeTitle: string | null;
 }) {
   return (
     <section className="panel runtime-panel">
       <div className="panel-header">
         <h2>Runtime</h2>
+      </div>
+      <div className="runtime-section">
+        <h3>Pending Resume</h3>
+        {props.pendingResumeTaskId === null ? (
+          <div className="runtime-summary">No reminder is waiting for user input.</div>
+        ) : (
+          <div className="runtime-summary">
+            <strong>{props.pendingResumeTaskId}</strong>
+            {props.pendingResumeTitle ? ` is waiting for time input for ${props.pendingResumeTitle}.` : " is waiting for time input."}
+          </div>
+        )}
       </div>
       <div className="runtime-section">
         <h3>Conversation</h3>

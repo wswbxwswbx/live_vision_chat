@@ -14,6 +14,17 @@ class ConversationState(TypedDict):
     interrupt_epoch: int
 
 
+class ReminderTaskPayload(TypedDict):
+    task_type: Literal["create_reminder"]
+    title: str
+    raw_user_input: str
+    scheduled_at_text: str | None
+
+
+class ReminderCheckpointPayload(ReminderTaskPayload):
+    missing_field: Literal["scheduled_at"]
+
+
 class TaskRecord(TypedDict, total=False):
     task_id: str
     dialog_id: str

@@ -30,6 +30,23 @@ def test_parse_audio_chunk_message() -> None:
     assert message.payload.durationMs == 100
 
 
+def test_parse_handoff_resume_message() -> None:
+    payload = {
+        "type": "handoff_resume",
+        "sessionId": "s1",
+        "messageId": "m-r1",
+        "payload": {
+            "taskId": "task-1",
+            "text": "tomorrow at 9am",
+        },
+    }
+
+    message = parse_client_message(payload)
+    assert message.type == "handoff_resume"
+    assert message.payload.taskId == "task-1"
+    assert message.payload.text == "tomorrow at 9am"
+
+
 def test_parse_video_frame_message() -> None:
     payload = {
         "type": "video_frame",

@@ -8,6 +8,10 @@ import type { AudioChunkPayload, ServerMessage, VideoFramePayload } from "./type
 
 type CloseHandle = { close: () => void } | null;
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class SessionController {
   private liveClient: GatewayClient;
   private mockClient = new MockClient();
@@ -27,7 +31,7 @@ export class SessionController {
     const state = this.store.getState();
     if (state.mode === "mock") {
       this.connection = this.mockClient.connect(state.sessionId, (message) => {
-        this.handleServerMessage(message);
+        void this.handleServerMessage(message);
       });
       this.store.setConnectionStatus("mock");
       this.store.applySnapshot(await this.mockClient.fetchSnapshot(state.sessionId));
@@ -44,7 +48,9 @@ export class SessionController {
       onOpen: () => this.store.setConnectionStatus("connected"),
       onClose: () => this.store.setConnectionStatus("disconnected"),
       onError: (error) => this.store.setConnectionStatus("error", error),
-      onMessage: (message) => this.handleServerMessage(message),
+      onMessage: (message) => {
+        void this.handleServerMessage(message);
+      },
     });
   }
 
@@ -69,6 +75,12 @@ export class SessionController {
       await this.mockClient.sendTurn(state.sessionId, text);
       return;
     }
+
+    if (state.pendingResumeTaskId !== null) {
+      this.liveClient.sendHandoffResume(state.sessionId, state.pendingResumeTaskId, text);
+      return;
+    }
+
     this.liveClient.sendTurn(state.sessionId, text);
   }
 
@@ -120,17 +132,39 @@ export class SessionController {
     }
   }
 
-  private handleServerMessage(message: ServerMessage): void {
+  private async handleServerMessage(message: ServerMessage): Promise<void> {
     if (message.type === "assistant_text") {
       this.store.applyAssistantText(message);
       if (this.store.getState().ttsEnabled) {
         this.tts.speak(message.payload.text);
+      }
+      try {
+        await this.refreshSnapshot();
+      } catch (error) {
+        this.store.setConnectionStatus("error", getErrorMessage(error));
       }
       return;
     }
 
     if (message.type === "task_event") {
       this.store.applyTaskEvent(message);
+      try {
+        await this.refreshSnapshot();
+      } catch (error) {
+        this.store.setConnectionStatus("error", getErrorMessage(error));
+      }
+    }
+  }
+
+  private async refreshSnapshot(): Promise<void> {
+    const state = this.store.getState();
+    if (state.mode !== "live") {
+      return;
+    }
+
+    const snapshot = await this.liveClient.fetchSnapshot(state.sessionId);
+    if (snapshot !== null) {
+      this.store.applySnapshot(snapshot);
     }
   }
 

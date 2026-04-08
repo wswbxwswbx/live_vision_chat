@@ -74,6 +74,15 @@ export class GatewayClient {
     });
   }
 
+  sendHandoffResume(sessionId: string, taskId: string, text: string): void {
+    this.send({
+      type: "handoff_resume",
+      sessionId,
+      messageId: `resume:${Date.now()}`,
+      payload: { taskId, text },
+    });
+  }
+
   sendAudioChunk(sessionId: string, payload: AudioChunkPayload): void {
     this.send({
       type: "audio_chunk",

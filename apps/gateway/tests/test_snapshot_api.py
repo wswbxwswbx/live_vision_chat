@@ -31,7 +31,7 @@ def test_snapshot_api_returns_session_snapshot_after_turn() -> None:
             "sessionId": "s1",
             "messageId": "m1:assistant",
             "payload": {
-                "text": "stub",
+                "text": "Fast reply: hello",
                 "source": "fast",
             },
         }

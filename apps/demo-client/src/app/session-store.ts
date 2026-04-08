@@ -6,6 +6,7 @@ import type {
   DemoClientState,
   MediaSummary,
   SessionSnapshot,
+  SessionTaskSnapshot,
   TaskEventMessage,
   TaskEventRecord,
 } from "./types";
@@ -41,6 +42,15 @@ function createAssistantMessage(message: AssistantTextMessage): ChatMessage {
   };
 }
 
+function getPendingResumeTask(tasks: SessionTaskSnapshot[]): SessionTaskSnapshot | null {
+  return [...tasks]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.task?.status === "waiting_user" && entry.checkpoint?.state === "waiting_user",
+    ) ?? null;
+}
+
 export class SessionStore {
   private state: DemoClientState;
   private listeners = new Set<Listener>();
@@ -62,6 +72,8 @@ export class SessionStore {
       chatMessages: [],
       recentTaskEvents: [],
       lastCheckpoint: null,
+      pendingResumeTaskId: null,
+      pendingResumeTitle: null,
       lastAudioChunk: null,
       lastVideoFrame: null,
     };
@@ -126,6 +138,11 @@ export class SessionStore {
       .reverse()
       .map((entry) => entry.checkpoint)
       .find((checkpoint): checkpoint is CheckpointRecord => checkpoint !== null) ?? null;
+    const pendingResumeTask = getPendingResumeTask(snapshot.tasks);
+    const pendingResumePayload =
+      pendingResumeTask?.task?.payload ?? pendingResumeTask?.checkpoint?.payload;
+    const pendingResumeTitle =
+      typeof pendingResumePayload?.title === "string" ? pendingResumePayload.title : null;
 
     this.patch({
       snapshotLoaded: true,
@@ -133,6 +150,8 @@ export class SessionStore {
       tasks: snapshot.tasks,
       recentTaskEvents: taskEvents,
       lastCheckpoint,
+      pendingResumeTaskId: pendingResumeTask?.task?.task_id ?? null,
+      pendingResumeTitle,
     });
   }
 
