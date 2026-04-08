@@ -27,6 +27,16 @@ This repository is the single source of truth for the `live_vision_chat` project
 - `packages/memory`
   - Python long-term memory stubs
 
+## M2 Reminder Flow
+
+The current M2 runtime path supports one minimally real Fast/Slow task flow for `create_reminder`.
+
+- `FastRuntime` triages direct replies versus reminder handoff
+- `RuntimeFacade` immediately runs the reminder handoff through `SlowRuntime`
+- `SlowRuntime` either completes the reminder or enters `waiting_user`
+- `handoff_resume` continues the same reminder task when only time input is missing
+- reminder results are stored in the in-memory execution registry and reflected in runtime snapshots
+
 ## Reference Policy
 
 Reference codebases are used for inspiration only. They are not the product source of truth.
@@ -84,8 +94,9 @@ Then open the Vite URL in a browser. The demo client will:
 
 - fetch `GET /sessions/:session_id/snapshot`
 - open `ws://<host>:3000/sessions/:session_id`
-- send `turn`, `audio_chunk`, and `video_frame`
+- send `turn`, `handoff_resume`, `audio_chunk`, and `video_frame`
 - render chat, conversation, tasks, checkpoints, and recent task events
+- reuse the chat box to continue a `waiting_user` reminder task
 - play assistant text through browser `speechSynthesis`
 
 ## Debug-Stage Media Transport

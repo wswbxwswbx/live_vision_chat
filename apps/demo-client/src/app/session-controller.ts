@@ -27,7 +27,7 @@ export class SessionController {
     const state = this.store.getState();
     if (state.mode === "mock") {
       this.connection = this.mockClient.connect(state.sessionId, (message) => {
-        this.handleServerMessage(message);
+        void this.handleServerMessage(message);
       });
       this.store.setConnectionStatus("mock");
       this.store.applySnapshot(await this.mockClient.fetchSnapshot(state.sessionId));
@@ -44,7 +44,9 @@ export class SessionController {
       onOpen: () => this.store.setConnectionStatus("connected"),
       onClose: () => this.store.setConnectionStatus("disconnected"),
       onError: (error) => this.store.setConnectionStatus("error", error),
-      onMessage: (message) => this.handleServerMessage(message),
+      onMessage: (message) => {
+        void this.handleServerMessage(message);
+      },
     });
   }
 
@@ -69,6 +71,12 @@ export class SessionController {
       await this.mockClient.sendTurn(state.sessionId, text);
       return;
     }
+
+    if (state.pendingResumeTaskId !== null) {
+      this.liveClient.sendHandoffResume(state.sessionId, state.pendingResumeTaskId, text);
+      return;
+    }
+
     this.liveClient.sendTurn(state.sessionId, text);
   }
 
@@ -120,17 +128,31 @@ export class SessionController {
     }
   }
 
-  private handleServerMessage(message: ServerMessage): void {
+  private async handleServerMessage(message: ServerMessage): Promise<void> {
     if (message.type === "assistant_text") {
       this.store.applyAssistantText(message);
       if (this.store.getState().ttsEnabled) {
         this.tts.speak(message.payload.text);
       }
+      await this.refreshSnapshot();
       return;
     }
 
     if (message.type === "task_event") {
       this.store.applyTaskEvent(message);
+      await this.refreshSnapshot();
+    }
+  }
+
+  private async refreshSnapshot(): Promise<void> {
+    const state = this.store.getState();
+    if (state.mode !== "live") {
+      return;
+    }
+
+    const snapshot = await this.liveClient.fetchSnapshot(state.sessionId);
+    if (snapshot !== null) {
+      this.store.applySnapshot(snapshot);
     }
   }
 

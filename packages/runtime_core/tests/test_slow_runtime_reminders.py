@@ -99,3 +99,46 @@ async def test_slow_runtime_enters_waiting_user_when_time_missing() -> None:
     assert checkpoint is not None
     assert checkpoint["payload"]["missing_field"] == "scheduled_at"
     assert [event["event_kind"] for event in events] == ["accepted", "running", "waiting_user"]
+
+
+@pytest.mark.asyncio
+async def test_slow_runtime_resumes_waiting_reminder_when_time_is_provided() -> None:
+    from execution.reminder_service import InMemoryReminderService
+    from runtime_core.slow_runtime import SlowRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store)
+    runtime = SlowRuntime(store=store, reminder_service=InMemoryReminderService())
+
+    waiting_result = await runtime.run_reminder_task(
+        task_id="task-1",
+        dialog_id="dialog-1",
+        raw_user_input="Remind me to pay rent",
+        source_session_id="s1",
+    )
+    resumed_result = await runtime.resume_reminder_task(
+        task_id="task-1",
+        dialog_id="dialog-1",
+        text="tomorrow at 9am",
+        source_session_id="s1",
+    )
+
+    task = store.get_task("task-1")
+    checkpoint = store.get_checkpoint("task-1")
+    events = store.list_task_events("task-1")
+
+    assert waiting_result.status == "waiting_user"
+    assert resumed_result.status == "completed"
+    assert resumed_result.reply_text == "Okay, I’ll remind you tomorrow at 9am."
+    assert task is not None
+    assert task["status"] == "completed"
+    assert checkpoint is not None
+    assert checkpoint["state"] == "completed"
+    assert checkpoint["payload"]["scheduled_at_text"] == "tomorrow at 9am"
+    assert [event["event_kind"] for event in events] == [
+        "accepted",
+        "running",
+        "waiting_user",
+        "running",
+        "completed",
+    ]

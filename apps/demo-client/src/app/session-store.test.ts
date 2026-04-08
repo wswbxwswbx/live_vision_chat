@@ -32,6 +32,56 @@ describe("SessionStore", () => {
     expect(state.conversation?.attention_owner).toBe("slow");
     expect(state.tasks).toHaveLength(1);
     expect(state.lastCheckpoint?.state).toBe("midway");
+    expect(state.pendingResumeTaskId).toBeNull();
+  });
+
+  test("derives pending reminder resume details from waiting snapshot", () => {
+    const store = new SessionStore("http://127.0.0.1:3000", "s1");
+
+    store.applySnapshot({
+      session_id: "s1",
+      dialog_id: "d1",
+      conversation: {
+        dialog_id: "d1",
+        speaker_owner: "fast",
+        attention_owner: "slow",
+        foreground_task_id: null,
+        background_task_ids: ["task-1"],
+        interrupt_epoch: 1,
+      },
+      tasks: [
+        {
+          task: {
+            task_id: "task-1",
+            status: "waiting_user",
+            summary: "When should I remind you?",
+            payload: {
+              task_type: "create_reminder",
+              title: "Pay rent",
+              raw_user_input: "Remind me to pay rent",
+              scheduled_at_text: null,
+            },
+          },
+          checkpoint: {
+            task_id: "task-1",
+            state: "waiting_user",
+            payload: {
+              task_type: "create_reminder",
+              title: "Pay rent",
+              raw_user_input: "Remind me to pay rent",
+              scheduled_at_text: null,
+              missing_field: "scheduled_at",
+            },
+          },
+          events: [],
+          tool_calls: [],
+        },
+      ],
+    });
+
+    const state = store.getState();
+    expect(state.pendingResumeTaskId).toBe("task-1");
+    expect(state.pendingResumeTitle).toBe("Pay rent");
   });
 
   test("records outgoing and assistant chat messages", () => {

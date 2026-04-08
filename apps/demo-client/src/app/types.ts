@@ -141,6 +141,8 @@ export interface DemoClientState {
   chatMessages: ChatMessage[];
   recentTaskEvents: TaskEventRecord[];
   lastCheckpoint: CheckpointRecord | null;
+  pendingResumeTaskId: string | null;
+  pendingResumeTitle: string | null;
   lastAudioChunk: MediaSummary | null;
   lastVideoFrame: MediaSummary | null;
 }
