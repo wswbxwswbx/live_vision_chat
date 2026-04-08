@@ -1,10 +1,29 @@
 # M2 Minimum Real Fast/Slow Runtime Design
 
 **Date:** 2026-04-08  
-**Status:** Proposed  
+**Status:** Implemented
 **Scope:** M2 milestone for making the current Python-first Fast/Slow runtime minimally real before starting streaming-loop work
 
 ---
+
+## 0. Implementation Status
+
+This spec now describes shipped runtime behavior in the Python mainline.
+
+M2 is implemented with:
+
+- direct Fast replies for non-reminder turns
+- reminder handoff through `RuntimeFacade`
+- Slow reminder completion and `waiting_user`
+- `handoff_resume` recovery for missing reminder time
+- in-memory reminder execution records
+- demo-client reminder resume support
+- session-bound `handoff_resume` validation and recoverable invalid-resume replies
+
+Current follow-up direction is:
+
+- keep M2 stable
+- start `M3: Streaming Ingress + First AccumulationLoop`
 
 ## 1. Goal
 
@@ -22,16 +41,16 @@ This milestone is about validating runtime behavior, not about building a broad 
 
 ---
 
-## 2. Why M2 Comes Before Streaming
+## 2. Why M2 Came Before Streaming
 
-Current code already has:
+At design time, current code already had:
 
 - Python-first gateway
 - protocol and shared runtime store
 - demo client with text, audio uplink, video uplink, and runtime panels
 - `FastRuntime / SlowRuntime / TaskRuntime / RuntimeFacade` skeletons
 
-Current code does **not** yet have:
+At design time, current code did **not** yet have:
 
 - a real Fast decision path
 - a real Slow one-shot task runner
@@ -39,11 +58,11 @@ Current code does **not** yet have:
 - a real execution path through `packages/execution`
 - `waiting_user / handoff_resume` behavior
 
-Therefore the next milestone cannot start from streaming work.
+That is why the next milestone could not start from streaming work.
 
 If streaming input is routed now, it only lands in an incomplete runtime shell.
 
-Correct order:
+The resulting order was:
 
 1. M2: Minimum Real Fast/Slow Runtime
 2. M3: Streaming Ingress + First AccumulationLoop
@@ -386,7 +405,9 @@ The chat input should also serve as the recovery path for `handoff_resume`.
 
 ---
 
-## 11. Acceptance Criteria
+## 11. Acceptance Criteria Now Shipped
+
+The items below are now part of the current implementation baseline.
 
 M2 is accepted only if all of the following are true.
 
@@ -454,10 +475,10 @@ Those remain follow-up milestones.
 
 ---
 
-## 13. Next Step After Approval
+## 13. Next Step After M2
 
-After this spec is approved:
+After M2:
 
-1. write the M2 implementation plan
-2. execute M2 as a milestone
-3. only then move to streaming-ingress work
+1. keep the shipped M2 reminder path stable
+2. write the M3 streaming-ingress plan on top of the current runtime baseline
+3. only then extend into the first real `AccumulationLoop`

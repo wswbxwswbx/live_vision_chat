@@ -21,9 +21,9 @@ This repository is the single source of truth for the `live_vision_chat` project
 - `packages/runtime_store`
   - Python shared runtime state truth source
 - `packages/runtime_core`
-  - Python Fast/Slow runtime skeletons, registries, snapshots, and facade
+  - Python Fast/Slow runtime orchestration, task lifecycle, snapshots, and facade
 - `packages/execution`
-  - Python execution-layer stubs
+  - Python execution interfaces plus the first in-memory reminder service
 - `packages/memory`
   - Python long-term memory stubs
 
@@ -37,6 +37,17 @@ The current M2 runtime path supports one minimally real Fast/Slow task flow for 
 - `handoff_resume` continues the same reminder task when only time input is missing
 - reminder results are stored in the in-memory execution registry and reflected in runtime snapshots
 
+## Docs Map
+
+- Long-term architecture direction:
+  - `docs/superpowers/specs/2026-04-01-multiagent-architecture-design.md`
+- Shipped M2 runtime behavior:
+  - `docs/superpowers/specs/2026-04-08-m2-minimum-real-fast-slow-runtime-design.md`
+- Current implementation status and next milestone:
+  - `docs/superpowers/status/2026-04-08-m2-runtime-status.md`
+- Historical pre-M2 baseline only:
+  - `docs/superpowers/status/2026-04-07-python-runtime-baseline.md`
+
 ## Reference Policy
 
 Reference codebases are used for inspiration only. They are not the product source of truth.
@@ -49,15 +60,27 @@ Reference codebases are used for inspiration only. They are not the product sour
 
 - Use this repository as the main workspace going forward
 - Prefer updating docs here rather than under legacy local folders
-- Treat `docs/superpowers/specs/2026-04-01-multiagent-architecture-design.md` as the current architecture source of truth
+- Treat `docs/superpowers/specs/2026-04-01-multiagent-architecture-design.md` as the long-term architecture source of truth
+- Treat `docs/superpowers/specs/2026-04-08-m2-minimum-real-fast-slow-runtime-design.md` as the current runtime-behavior baseline
+- Treat `docs/superpowers/status/2026-04-08-m2-runtime-status.md` as the current shipped-state and next-step summary
 - Treat the Python packages as the formal implementation mainline
 
-## Python Workspace
+## Python Setup And Verification
+
+Use a Python 3.11+ environment from the repository root.
+
+Current `pyproject.toml` configures `pytest` import paths, but it does not yet lock server dependencies. Before running the gateway or Python tests, make sure your active environment already includes the packages used by the current server stack, including:
+
+- `fastapi`
+- `uvicorn`
+- `pydantic`
+- `pytest`
+- `httpx`
 
 Run targeted or full Python verification from the worktree root:
 
 ```bash
-corepack pnpm exec pytest packages apps/gateway/tests -q
+python -m pytest packages apps/gateway/tests -q
 ```
 
 Current Python foundation includes:

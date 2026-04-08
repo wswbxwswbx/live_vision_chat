@@ -1,317 +1,34 @@
-# Python Runtime Baseline Summary
+# Python Runtime Baseline Summary (Historical)
 
 **Date:** 2026-04-07  
-**Status:** Baseline Ready  
-**Scope:** Python-first server backbone + repository-local demo client for integration debugging
+**Status:** Historical baseline before M2
+**Scope:** Repository checkpoint for the pre-M2 Python-first server skeleton
 
 ---
 
-## 1. What Is Done
+This document is retained as a historical checkpoint only.
 
-This worktree establishes the first stable Python-first baseline for the project.
+It no longer describes the current shipped codebase.
 
-Completed:
+Use these documents instead when continuing development:
 
-- Python-first runtime backbone
-- shared runtime state skeleton
-- thin FastAPI gateway
-- repository-local browser demo client for integration debugging
-- protocol support for text turn plus debug-stage media uplink
-- local debug flow documentation
+- current architecture direction:
+  - `docs/superpowers/specs/2026-04-01-multiagent-architecture-design.md`
+- shipped M2 runtime behavior:
+  - `docs/superpowers/specs/2026-04-08-m2-minimum-real-fast-slow-runtime-design.md`
+- current implementation status and next milestone:
+  - `docs/superpowers/status/2026-04-08-m2-runtime-status.md`
 
-Validated capabilities:
+What this historical baseline established:
 
-- `GET /health`
-- `GET /sessions/:session_id/snapshot`
-- websocket session connection
-- `turn -> assistant_text`
-- browser text chat UI
-- browser `speechSynthesis` TTS
-- continuous microphone chunk upload
-- low-frame-rate camera frame upload
-- runtime state visualization for `conversation / tasks / task_events / checkpoint`
+- Python-first package split for `gateway / protocol / runtime_store / runtime_core / execution / memory`
+- repository-local demo client for integration debugging
+- initial gateway, snapshot, websocket, and runtime-observability skeleton
 
----
+What changed after this baseline:
 
-## 2. Fixed Architecture Decisions
+- M2 made the Fast/Slow runtime minimally real
+- reminder execution and `waiting_user / handoff_resume` are now implemented
+- the demo client can now resume reminder tasks
 
-These decisions should now be treated as baseline constraints, not open design questions.
-
-- Formal mainline is Python-first
-- `reference/claude-code` remains the primary architecture reference
-- `claw-code-main` and `cc-mini-main` are implementation references only
-- Server modules stay split as:
-  - `apps/gateway`
-  - `packages/protocol`
-  - `packages/runtime_store`
-  - `packages/runtime_core`
-  - `packages/execution`
-  - `packages/memory`
-- `RuntimeFacade` is the gateway-facing runtime entrypoint
-- shared runtime state is the truth source for runtime-observable state
-- `apps/demo-client` is an integration/debug tool, not a formal product client
-- debug-stage media transport is:
-  - `WebSocket + structured messages + base64 payload`
-- formal product target remains:
-  - app-native clients
-  - cleaner separation between control-plane traffic and production media transport
-
----
-
-## 3. Current Code Layout
-
-### 3.1 Gateway
-
-Path: [apps/gateway](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/gateway)
-
-Responsibilities:
-
-- HTTP ingress
-- websocket session ingress
-- CORS for local demo development
-- snapshot API exposure
-- delegating runtime work to `RuntimeFacade`
-
-Key files:
-
-- [app.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/gateway/app.py)
-- [http.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/gateway/http.py)
-- [ws.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/gateway/ws.py)
-- [dev.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/gateway/dev.py)
-
-### 3.2 Protocol
-
-Path: [packages/protocol](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/protocol)
-
-Responsibilities:
-
-- client/server message schema
-- strict message parsing
-- current debug-stage media message definitions
-
-Current important message types:
-
-- `turn`
-- `assistant_text`
-- `audio_chunk`
-- `video_frame`
-- task/tool related runtime messages
-
-Key file:
-
-- [messages.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/protocol/src/protocol/messages.py)
-
-### 3.3 Runtime Store
-
-Path: [packages/runtime_store](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_store)
-
-Responsibilities:
-
-- shared runtime truth source
-- `conversation`
-- `task`
-- `checkpoint`
-- `task_event`
-- `tool_call`
-
-Key files:
-
-- [models.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_store/src/runtime_store/models.py)
-- [memory_store.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_store/src/runtime_store/memory_store.py)
-
-### 3.4 Runtime Core
-
-Path: [packages/runtime_core](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_core)
-
-Responsibilities:
-
-- Fast/Slow runtime skeletons
-- task lifecycle helper
-- session/dialog/task binding
-- session snapshot composition
-- gateway-facing runtime facade
-
-Key files:
-
-- [fast_runtime.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_core/src/runtime_core/fast_runtime.py)
-- [slow_runtime.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_core/src/runtime_core/slow_runtime.py)
-- [task_runtime.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_core/src/runtime_core/task_runtime.py)
-- [runtime_facade.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_core/src/runtime_core/runtime_facade.py)
-- [session_snapshot.py](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/runtime_core/src/runtime_core/session_snapshot.py)
-
-### 3.5 Execution and Memory
-
-Paths:
-
-- [packages/execution](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/execution)
-- [packages/memory](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/packages/memory)
-
-Current state:
-
-- both are intentionally stubs
-- boundaries are fixed
-- real execution and long-term memory behavior still need implementation
-
-### 3.6 Demo Client
-
-Path: [apps/demo-client](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/demo-client)
-
-Responsibilities:
-
-- gateway/runtime integration debugging
-- text turn testing
-- browser TTS
-- microphone chunk uplink
-- camera frame uplink
-- runtime state visualization
-- `live / mock` mode switch
-
-Key files:
-
-- [App.tsx](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/demo-client/src/app/App.tsx)
-- [session-controller.ts](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/demo-client/src/app/session-controller.ts)
-- [gateway-client.ts](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/demo-client/src/lib/gateway-client.ts)
-- [audio-stream.ts](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/demo-client/src/lib/media/audio-stream.ts)
-- [video-stream.ts](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/apps/demo-client/src/lib/media/video-stream.ts)
-
----
-
-## 4. What Counts As Working Today
-
-The baseline should be considered healthy if all of the following hold:
-
-- gateway starts with `python -m apps.gateway.dev`
-- `curl -s http://127.0.0.1:3000/health` returns `{"ok":true}`
-- demo client reaches `connected`
-- sending a text turn yields `assistant_text`
-- microphone capture updates `Last audio chunk`
-- camera capture updates `Last video frame`
-- runtime panel shows `conversation` after the first turn
-
----
-
-## 5. Verification Status
-
-Verified at baseline:
-
-- `python -m pytest packages apps/gateway/tests -q`
-  - result: `43 passed`
-- `corepack pnpm test` in `apps/demo-client`
-  - result: `5 passed`
-- `corepack pnpm build` in `apps/demo-client`
-  - result: pass
-- local smoke checks
-  - `/health` pass
-  - websocket `turn -> assistant_text` pass
-
----
-
-## 6. Known Gaps
-
-These are expected and do not invalidate the baseline.
-
-- `FastRuntime` is still a skeleton
-- `SlowRuntime` and `TaskRuntime` are still minimal
-- `audio_chunk / video_frame` are accepted by gateway but not yet routed into true streaming runtime logic
-- `execution` is still a stub
-- `memory` is still a stub
-- `StreamingLoop / MonitoringLoop / GuidanceLoop` are not yet implemented in Python mainline
-- `packages/protocol` still contains a small amount of legacy TypeScript-era material that should be cleaned later
-
----
-
-## 7. Next Work
-
-Next work should follow the design spec rather than inventing a new direction.
-
-### 7.1 Immediate Priority Correction
-
-The next phase should **not** start from streaming work.
-
-Reason:
-
-- the current gateway, protocol, and demo client can already carry streaming-shaped input
-- but `FastRuntime`, `SlowRuntime`, and `TaskRuntime` are still skeletons
-- without a minimally real Fast/Slow runtime, streaming input would only be routed into an empty shell
-
-Therefore the correct next milestone is:
-
-- `M2: Minimum Real Fast/Slow Runtime`
-
-Only after that should the project move to:
-
-- `M3: Streaming Ingress + First AccumulationLoop`
-
-### 7.2 M2: Minimum Real Fast/Slow Runtime
-
-This should be the next implementation milestone.
-
-1. Make `FastRuntime` minimally real
-2. Make `SlowRuntime` minimally real for `OneShotLoop`-style tasks
-3. Implement the real `Fast -> Slow` handoff path
-4. Connect one real execution path through `packages/execution`
-
-Expected outcomes:
-
-- `FastRuntime` no longer always returns `stub`
-- simple requests can be answered directly by Fast
-- complex requests can create a slow task and return an immediate foreground acknowledgment
-- `SlowRuntime` can accept, run, and complete or wait a task
-- `task_event` and checkpoint updates become visible through snapshot and demo client panels
-
-### 7.3 M3: Streaming Ingress + First AccumulationLoop
-
-Streaming work should start only after `M2` is stable.
-
-1. Route `audio_chunk / video_frame` into runtime-observable state
-2. Add the first real streaming input consumption path
-3. Let `SlowRuntime` own the first streaming task lifecycle
-4. Implement the first minimal `AccumulationLoop`
-
-Expected outcomes:
-
-- media input no longer stops at the gateway
-- runtime state and snapshots can show recent streaming ingress
-- the first real streaming task can accumulate state and emit task events
-
-### 7.3 What Should Not Be Reopened Right Now
-
-- Python-first vs. TypeScript-first
-- gateway/runtime/store/execution/memory package split
-- demo client vs. formal app-client separation
-- debug-stage media transport compromise
-
-Those are already baseline decisions.
-
----
-
-## 8. Suggested Team Split
-
-The current baseline is ready for parallel work.
-
-- Gateway owner
-  - `apps/gateway`
-  - protocol ingress and session handling
-- Runtime core owner
-  - `packages/runtime_core`
-  - Fast/Slow/TaskRuntime and loop lifecycles
-- Runtime store owner
-  - `packages/runtime_store`
-  - state invariants and query/snapshot behavior
-- Execution owner
-  - `packages/execution`
-  - tool execution and workers
-- Memory owner
-  - `packages/memory`
-  - long-term memory behavior
-- Demo/debug client owner
-  - `apps/demo-client`
-  - debug UX and runtime observability
-
----
-
-## 9. Related Docs
-
-- [Architecture Spec](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/docs/superpowers/specs/2026-04-01-multiagent-architecture-design.md)
-- [Python-First Runtime Rebuild Plan](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/docs/superpowers/plans/2026-04-07-python-first-runtime-rebuild.md)
-- [Demo Client Debug Loop Plan](/Users/chengqinglin/Documents/live_vision_chat/.worktrees/reuse-first-runtime/docs/superpowers/plans/2026-04-07-demo-client-debug-loop.md)
+Do not use this file as the current implementation guide.
