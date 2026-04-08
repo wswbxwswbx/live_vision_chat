@@ -8,6 +8,10 @@ import type { AudioChunkPayload, ServerMessage, VideoFramePayload } from "./type
 
 type CloseHandle = { close: () => void } | null;
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class SessionController {
   private liveClient: GatewayClient;
   private mockClient = new MockClient();
@@ -134,13 +138,21 @@ export class SessionController {
       if (this.store.getState().ttsEnabled) {
         this.tts.speak(message.payload.text);
       }
-      await this.refreshSnapshot();
+      try {
+        await this.refreshSnapshot();
+      } catch (error) {
+        this.store.setConnectionStatus("error", getErrorMessage(error));
+      }
       return;
     }
 
     if (message.type === "task_event") {
       this.store.applyTaskEvent(message);
-      await this.refreshSnapshot();
+      try {
+        await this.refreshSnapshot();
+      } catch (error) {
+        this.store.setConnectionStatus("error", getErrorMessage(error));
+      }
     }
   }
 

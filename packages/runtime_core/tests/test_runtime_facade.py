@@ -83,6 +83,30 @@ async def test_runtime_facade_routes_handoff_resume_to_waiting_reminder_task() -
 
 
 @pytest.mark.asyncio
+async def test_runtime_facade_clears_handoff_task_id_when_reminder_completes_immediately() -> None:
+    from runtime_core.runtime_facade import RuntimeFacade
+
+    facade = RuntimeFacade()
+    turn_message = parse_client_message(
+        {
+            "type": "turn",
+            "sessionId": "s1",
+            "messageId": "m1",
+            "payload": {"text": "Remind me tomorrow at 9am to pay rent"},
+        }
+    )
+
+    result = await facade.handle_client_message(turn_message)
+    snapshot = facade.get_session_snapshot("s1")
+
+    assert result.reply_text == "Okay, I’ll remind you tomorrow at 9am."
+    assert result.handoff_task_id is None
+    assert snapshot is not None
+    assert snapshot.tasks[0].task is not None
+    assert snapshot.tasks[0].task["status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_runtime_facade_rejects_handoff_resume_from_another_session() -> None:
     from runtime_core.runtime_facade import RuntimeFacade
 

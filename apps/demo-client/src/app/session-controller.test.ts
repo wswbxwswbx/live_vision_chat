@@ -157,4 +157,46 @@ describe("SessionController", () => {
     expect(store.getState().pendingResumeTaskId).toBe("task-1");
     expect(store.getState().chatMessages.at(-1)?.text).toBe("When should I remind you?");
   });
+
+  test("captures snapshot refresh failures after assistant text", async () => {
+    const store = new SessionStore("http://127.0.0.1:3000", "s1");
+    const controller = new SessionController(store);
+    const fetchSnapshot = vi.fn().mockRejectedValue(new Error("snapshot request failed: 500"));
+
+    (
+      controller as unknown as {
+        liveClient: {
+          fetchSnapshot: (sessionId: string) => Promise<unknown>;
+        };
+      }
+    ).liveClient = {
+      fetchSnapshot,
+    };
+
+    await expect(
+      (controller as unknown as {
+        handleServerMessage: (message: {
+          type: "assistant_text";
+          sessionId: string;
+          messageId: string;
+          payload: { text: string; source: "system" };
+        }) => Promise<void>;
+      }).handleServerMessage({
+        type: "assistant_text",
+        sessionId: "s1",
+        messageId: "assistant-1",
+        payload: {
+          text: "task task-1 is not waiting for user input",
+          source: "system",
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchSnapshot).toHaveBeenCalledWith("s1");
+    expect(store.getState().connectionStatus).toBe("error");
+    expect(store.getState().connectionError).toBe("snapshot request failed: 500");
+    expect(store.getState().chatMessages.at(-1)?.text).toBe(
+      "task task-1 is not waiting for user input",
+    );
+  });
 });

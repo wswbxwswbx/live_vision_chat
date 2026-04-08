@@ -64,7 +64,11 @@ class RuntimeFacade:
                         if slow_result.reply_text is not None:
                             return FastTurnResult(
                                 reply_text=slow_result.reply_text,
-                                handoff_task_id=result.handoff_task_id,
+                                handoff_task_id=(
+                                    result.handoff_task_id
+                                    if slow_result.status == "waiting_user"
+                                    else None
+                                ),
                             )
             return result
 
