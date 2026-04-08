@@ -1,6 +1,7 @@
 import pytest
 
 from runtime_store.memory_store import InMemoryRuntimeStore
+from runtime_store.models import ReminderCheckpointPayload, ReminderTaskPayload
 
 
 def test_slow_cannot_change_speaker_owner() -> None:
@@ -145,6 +146,85 @@ def test_upsert_and_get_checkpoint_round_trip() -> None:
 
     assert created["task_id"] == "task-1"
     assert store.get_checkpoint("task-1") == created
+
+
+def test_store_preserves_waiting_user_task_and_checkpoint_payload() -> None:
+    store = InMemoryRuntimeStore()
+    store.upsert_conversation(
+        "dialog-1",
+        {
+            "dialog_id": "dialog-1",
+            "speaker_owner": "fast",
+            "attention_owner": "fast",
+            "foreground_task_id": None,
+            "background_task_ids": [],
+            "interrupt_epoch": 0,
+        },
+        actor="system",
+    )
+
+    task_payload: ReminderTaskPayload = {
+        "task_type": "create_reminder",
+        "title": "Pay rent",
+        "raw_user_input": "Remind me to pay rent",
+        "scheduled_at_text": None,
+    }
+    checkpoint_payload: ReminderCheckpointPayload = {
+        "task_type": "create_reminder",
+        "title": "Pay rent",
+        "raw_user_input": "Remind me to pay rent",
+        "scheduled_at_text": None,
+        "missing_field": "scheduled_at",
+    }
+
+    store.upsert_task(
+        "task-1",
+        {
+            "dialog_id": "dialog-1",
+            "status": "waiting_user",
+            "payload": task_payload,
+        },
+    )
+    store.upsert_checkpoint(
+        "task-1",
+        {
+            "dialog_id": "dialog-1",
+            "state": "waiting_user",
+            "payload": checkpoint_payload,
+        },
+    )
+
+    assert store.get_task("task-1")["status"] == "waiting_user"
+    assert store.get_task("task-1")["payload"]["task_type"] == "create_reminder"
+    assert store.get_checkpoint("task-1")["payload"]["missing_field"] == "scheduled_at"
+
+
+def test_checkpoint_payload_mutation_does_not_leak_across_store_boundary() -> None:
+    store = InMemoryRuntimeStore()
+    payload: ReminderCheckpointPayload = {
+        "task_type": "create_reminder",
+        "title": "Pay rent",
+        "raw_user_input": "Remind me to pay rent",
+        "scheduled_at_text": None,
+        "missing_field": "scheduled_at",
+    }
+
+    created = store.upsert_checkpoint(
+        "task-1",
+        {
+            "dialog_id": "dialog-1",
+            "state": "waiting_user",
+            "payload": payload,
+        },
+    )
+
+    payload["title"] = "Mutated"
+    created["payload"]["title"] = "Mutated after read"
+
+    stored = store.get_checkpoint("task-1")
+
+    assert stored is not None
+    assert stored["payload"]["title"] == "Pay rent"
 
 
 def test_append_and_list_task_events_round_trip() -> None:
