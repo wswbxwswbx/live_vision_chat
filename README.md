@@ -45,6 +45,8 @@ The current M2 runtime path supports one minimally real Fast/Slow task flow for 
   - `docs/superpowers/specs/2026-04-08-m2-minimum-real-fast-slow-runtime-design.md`
 - Current implementation status and next milestone:
   - `docs/superpowers/status/2026-04-08-m2-runtime-status.md`
+- Chinese developer onboarding and extension guide:
+  - `docs/superpowers/status/2026-04-08-developer-guide.md`
 - Historical pre-M2 baseline only:
   - `docs/superpowers/status/2026-04-07-python-runtime-baseline.md`
 
