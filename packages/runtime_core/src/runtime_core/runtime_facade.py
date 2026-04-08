@@ -70,6 +70,12 @@ class RuntimeFacade:
 
         if message.type == "handoff_resume":
             task_id = message.payload.taskId
+            session_id = self._task_registry.get_session_id(task_id)
+            if session_id != message.sessionId:
+                raise ValueError(
+                    f"task {task_id} does not belong to session {message.sessionId}"
+                )
+
             task = self._store.get_task(task_id)
             if task is None:
                 raise ValueError(f"task does not exist: {task_id}")

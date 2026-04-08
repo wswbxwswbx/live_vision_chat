@@ -80,3 +80,34 @@ async def test_runtime_facade_routes_handoff_resume_to_waiting_reminder_task() -
     assert snapshot is not None
     assert snapshot.tasks[0].task is not None
     assert snapshot.tasks[0].task["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_facade_rejects_handoff_resume_from_another_session() -> None:
+    from runtime_core.runtime_facade import RuntimeFacade
+
+    facade = RuntimeFacade()
+    initial_turn = parse_client_message(
+        {
+            "type": "turn",
+            "sessionId": "s1",
+            "messageId": "m1",
+            "payload": {"text": "Remind me to pay rent"},
+        }
+    )
+    resume_message = parse_client_message(
+        {
+            "type": "handoff_resume",
+            "sessionId": "s2",
+            "messageId": "m2",
+            "payload": {
+                "taskId": "task-1",
+                "text": "tomorrow at 9am",
+            },
+        }
+    )
+
+    await facade.handle_client_message(initial_turn)
+
+    with pytest.raises(ValueError, match="does not belong to session"):
+        await facade.handle_client_message(resume_message)
