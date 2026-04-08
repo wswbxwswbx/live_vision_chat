@@ -33,6 +33,7 @@ class RuntimeFacade:
         self._fast_runtime = fast_runtime or FastRuntime(
             store=resolved_store,
             conversation_registry=resolved_conversation_registry,
+            task_registry=resolved_task_registry,
         )
         self._slow_runtime = slow_runtime or SlowRuntime(store=resolved_store)
         self._snapshot_reader = snapshot_reader or SessionSnapshotReader(

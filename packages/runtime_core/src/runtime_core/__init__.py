@@ -1,4 +1,6 @@
 from .fast_runtime import FastRuntime, FastTurnResult
+from .reminder_classifier import ReminderIntent, RuleBasedReminderClassifier
+from .reminder_parser import ParsedReminderRequest, parse_reminder_request
 from .runtime_facade import RuntimeFacade
 from .session_conversation_registry import SessionConversationRegistry
 from .session_snapshot import SessionSnapshot, SessionSnapshotReader, SessionTaskSnapshot
@@ -9,7 +11,10 @@ from .task_runtime import TaskRuntime
 __all__ = [
     "FastRuntime",
     "FastTurnResult",
+    "ParsedReminderRequest",
+    "ReminderIntent",
     "RuntimeFacade",
+    "RuleBasedReminderClassifier",
     "SessionConversationRegistry",
     "SessionSnapshot",
     "SessionSnapshotReader",
@@ -18,4 +23,5 @@ __all__ = [
     "SlowRunResult",
     "SlowRuntime",
     "TaskRuntime",
+    "parse_reminder_request",
 ]

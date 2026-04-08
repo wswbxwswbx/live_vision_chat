@@ -20,7 +20,8 @@ async def test_runtime_facade_routes_turn_and_exposes_snapshot() -> None:
     result = await facade.handle_client_message(turn_message)
     snapshot = facade.get_session_snapshot("s1")
 
-    assert result.reply_text == "stub"
+    assert result.reply_text == "Fast reply: hello"
+    assert result.handoff_task_id is None
     assert snapshot is not None
     assert snapshot.session_id == "s1"
     assert snapshot.dialog_id == "s1"
