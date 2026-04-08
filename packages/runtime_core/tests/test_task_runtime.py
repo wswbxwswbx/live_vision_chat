@@ -1,5 +1,6 @@
 import pytest
 
+from runtime_store.models import ReminderCheckpointPayload, ReminderTaskPayload
 from runtime_store.memory_store import InMemoryRuntimeStore
 
 
@@ -106,3 +107,79 @@ async def test_complete_can_preserve_attention_when_requested() -> None:
     assert conversation is not None
     assert conversation["attention_owner"] == "slow"
     assert conversation["background_task_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_mark_waiting_user_updates_task_and_checkpoint() -> None:
+    from runtime_core.task_runtime import TaskRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store)
+    task_runtime = TaskRuntime(store=store)
+
+    task_payload: ReminderTaskPayload = {
+        "task_type": "create_reminder",
+        "title": "Pay rent",
+        "raw_user_input": "Remind me to pay rent",
+        "scheduled_at_text": None,
+    }
+    checkpoint_payload: ReminderCheckpointPayload = {
+        "task_type": "create_reminder",
+        "title": "Pay rent",
+        "raw_user_input": "Remind me to pay rent",
+        "scheduled_at_text": None,
+        "missing_field": "scheduled_at",
+    }
+
+    await task_runtime.accept(
+        task_id="task-1",
+        dialog_id="dialog-1",
+        payload=task_payload,
+        summary="create_reminder",
+    )
+    await task_runtime.mark_waiting_user(
+        task_id="task-1",
+        dialog_id="dialog-1",
+        summary="When should I remind you?",
+        checkpoint_payload=checkpoint_payload,
+    )
+
+    task = store.get_task("task-1")
+    checkpoint = store.get_checkpoint("task-1")
+    events = store.list_task_events("task-1")
+
+    assert task is not None
+    assert task["status"] == "waiting_user"
+    assert task["summary"] == "When should I remind you?"
+    assert checkpoint is not None
+    assert checkpoint["state"] == "waiting_user"
+    assert checkpoint["payload"]["missing_field"] == "scheduled_at"
+    assert [event["event_kind"] for event in events] == ["accepted", "waiting_user"]
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_updates_task_and_releases_attention() -> None:
+    from runtime_core.task_runtime import TaskRuntime
+
+    store = InMemoryRuntimeStore()
+    _seed_conversation(store)
+    task_runtime = TaskRuntime(store=store)
+
+    await task_runtime.accept(task_id="task-1", dialog_id="dialog-1")
+    await task_runtime.mark_failed(
+        task_id="task-1",
+        dialog_id="dialog-1",
+        summary="Failed to create reminder",
+    )
+
+    task = store.get_task("task-1")
+    conversation = store.get_conversation("dialog-1")
+    events = store.list_task_events("task-1")
+
+    assert task is not None
+    assert task["status"] == "failed"
+    assert task["summary"] == "Failed to create reminder"
+    assert conversation is not None
+    assert conversation["attention_owner"] == "fast"
+    assert conversation["background_task_ids"] == []
+    assert [event["event_kind"] for event in events] == ["accepted", "failed"]
